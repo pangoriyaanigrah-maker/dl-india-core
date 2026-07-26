@@ -762,7 +762,16 @@ function ghDisconnect(){
 const num = v => { if (v==null||v==="") return null;
   if (typeof v==="number") return v;
   const n = parseFloat(String(v).replace(/[,₹%\s]/g,"")); return isNaN(n)?null:n; };
-const asDate = v => v instanceof Date ? v : (v ? new Date(v) : null);
+/* Trade dates are whole days. SheetJS converts an Excel serial to a few seconds
+   BEFORE midnight (28 Nov 00:00 comes back as 27 Nov 23:59:50), which renders
+   every trade a day early — so snap to the nearest local midnight. */
+const asDate = v => {
+  const d = v instanceof Date ? v : (v ? new Date(v) : null);
+  if (!d || isNaN(d)) return null;
+  const midnight = new Date(d); midnight.setHours(0, 0, 0, 0);
+  return d - midnight > 43200000            // past midday? belongs to the next day
+    ? new Date(midnight.getTime() + 86400000) : midnight;
+};
 const sideOf = v => { const s=String(v||"").trim().toLowerCase(); return s==="buy"?"Buy":s==="sell"?"Sell":null; };
 /* One parser per format, not per sheet: find the header row, then reuse the
    name-matching CSV readers. Handles both the DL template (headers part-way

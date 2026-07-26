@@ -16,6 +16,8 @@ from datetime import date, timedelta
 import openpyxl
 
 SRC, OUT = "Holdings_File.xlsx", "Holdings_File_TEST.xlsx"
+# Same trades again as their own workbook, for the Import tab's Trades drop zone.
+OUT_TRADES = "Trades_File_TEST.xlsx"
 NAV = 10_000_000          # ₹1 crore book, so a 2.5% position is ₹2.5L
 ADD_PULLBACK = 0.92       # stage adds 8% below spot
 COST_RATE = 0.001         # 10 bps all-in
@@ -93,13 +95,25 @@ def build():
                    round(qty * sell_px * COST_RATE, 2)])
     for c, w in zip("ABCDEF", (12, 12, 8, 10, 12, 10)):
         tr.column_dimensions[c].width = w
-
     wb.save(OUT)
+
+    # Standalone copy. The Trades drop zone requires a sheet literally named
+    # "Trades", so the sheet title matters more than the file name here.
+    tb = openpyxl.Workbook()
+    tb.remove(tb.active)
+    tb.create_sheet("Trades")
+    for row in tr.iter_rows(values_only=True):
+        tb["Trades"].append(list(row))
+    for c, w in zip("ABCDEF", (12, 12, 8, 10, 12, 10)):
+        tb["Trades"].column_dimensions[c].width = w
+    tb.save(OUT_TRADES)
+
     return filled, len(holdings), tr.max_row - 1
 
 
 if __name__ == "__main__":
     filled, n, trades = build()
     print(f"{OUT}: {n} holdings, {trades} trades, {len(filled)} blanks filled")
+    print(f"{OUT_TRADES}: {trades} trades (standalone)")
     for f in filled:
         print("  +", f)

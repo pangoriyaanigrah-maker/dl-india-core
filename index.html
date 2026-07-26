@@ -318,12 +318,61 @@ function applyFeed(j, srcTag){
    (price, mcap, z-scores) and is never hand-edited. Same fetch pattern as
    loadSignals: fetch, validate, render; a failure leaves a visible reason. */
 let state = { holdings: [], trades: [], cash: 0, srcH: "loading book.json\u2026", srcT: "" };
-/* An upload is kept in this browser so the book survives closing the tab with
-   no setup at all. Precedence on load: GitHub (shared truth) > this saved copy
-   > the book.json shipped in the folder. */
+/* Three ways an upload can be made to stick, best first:
+     1. written to book.json on disk (Chrome/Edge File System Access API) —
+        the only one build_signals.py can see, so new tickers get prices;
+     2. kept in this browser (localStorage) — no setup, but invisible to the
+        nightly job and lost with the browser profile;
+     3. GitHub, if connected — shared truth, wins on read.
+   Load order: GitHub > browser copy > book.json on disk. The browser copy is
+   deliberately cleared once disk writing works, so there is one truth again. */
 const BOOK_KEY = "dl_book";
 const saveLocal = () => { try{ localStorage.setItem(BOOK_KEY, bookJSON()); }catch(e){} };
 function clearLocal(){ localStorage.removeItem(BOOK_KEY); loadBook(); }
+
+const FS_OK = typeof window.showSaveFilePicker === "function";
+let bookHandle = null;                    // FileSystemFileHandle, kept in IndexedDB
+
+/* File handles can't go in localStorage — they only survive a structured clone,
+   so IndexedDB it is. One key, one value; not worth a library. */
+function idbBook(mode, val){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("dl_dash", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("h");
+    r.onerror = () => rej(r.error);
+    r.onsuccess = () => {
+      const tx = r.result.transaction("h", mode === "get" ? "readonly" : "readwrite");
+      const q = mode === "get" ? tx.objectStore("h").get("book")
+                               : tx.objectStore("h").put(val, "book");
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    };
+  });
+}
+async function writeBookFile(){
+  if (!bookHandle) return false;
+  // Chrome drops the grant between sessions, so re-ask. Needs a user gesture —
+  // every caller runs from a click for exactly this reason.
+  const opts = { mode: "readwrite" };
+  if (await bookHandle.queryPermission(opts) !== "granted"
+      && await bookHandle.requestPermission(opts) !== "granted") return false;
+  const w = await bookHandle.createWritable();
+  await w.write(bookJSON());
+  await w.close();
+  return true;
+}
+async function pickBookFile(){
+  try{
+    bookHandle = await showSaveFilePicker({ suggestedName: "book.json",
+      types: [{ description: "Dashboard book", accept: {"application/json": [".json"]} }] });
+    await idbBook("put", bookHandle);
+    if (await writeBookFile()) localStorage.removeItem(BOOK_KEY);   // disk is the truth now
+  }catch(e){
+    if (e.name !== "AbortError") alert("Couldn't use that file: " + e.message);
+  }
+  renderGh();
+}
+async function forgetBookFile(){ bookHandle = null; await idbBook("put", null); renderGh(); }
 
 async function loadBook(){
   let j = null, from = "book.json";
@@ -732,16 +781,29 @@ async function saveBook(message){
 function renderGh(){
   const el = document.getElementById("ghpanel");
   if (!el) return;
+  const mini = "font-size:11px;padding:3px 10px;margin-left:8px";
+  let head = bookHandle
+    ? `<div class="ghstat" style="margin-bottom:12px">Uploads write straight to
+         <b>${esc(bookHandle.name)}</b> on disk — the copy build_signals.py reads, so new tickers
+         get prices from tonight's run.
+         <button class="act ghost" style="${mini}" onclick="pickBookFile()">Change file</button>
+         <button class="act ghost" style="${mini}" onclick="forgetBookFile()">Stop</button></div>`
+    : FS_OK
+    ? `<div class="ghstat" style="margin-bottom:12px">Uploads are kept in this browser only.
+         Point them at <b>book.json</b> in this folder and they become a real file —
+         which is what the nightly price job reads.
+         <button class="act" style="${mini}" onclick="pickBookFile()">Write to book.json</button></div>`
+    : `<div class="ghstat" style="margin-bottom:12px">This browser can't write files
+         (Chrome or Edge can). Uploads are kept in the browser instead.</div>`;
   const saved = localStorage.getItem(BOOK_KEY);
-  let head = "";
   if (saved){
     let d = {};
     try{ d = JSON.parse(saved); }catch(e){}
-    head = `<div class="ghstat" style="margin-bottom:12px">
+    head += `<div class="ghstat" style="margin-bottom:12px">
         Saved copy in this browser: <b>${esc(d.source || "uploaded file")}</b> ·
         ${(d.holdings||[]).length} names · ${(d.trades||[]).length} trades${d.updated ? " · " + esc(d.updated) : ""}.
         It loads automatically every time you open the dashboard.
-        <button class="act ghost" style="font-size:11px;padding:3px 10px;margin-left:8px"
+        <button class="act ghost" style="${mini}"
           onclick="if(confirm('Discard the saved upload and go back to the book.json in this folder?')) clearLocal()"
           >Reset to book.json</button></div>`;
   }
@@ -927,7 +989,12 @@ function handleFile(file, slot){
 async function commit(){
   if (!staged) return;
   state = staged; staged = null; renderAll(); showView("ov");
-  saveLocal(); renderGh();          // survives closing the tab, with no setup
+  // Disk first — it's the copy build_signals.py reads. Fall back to the browser
+  // copy when there's no file handle, or the permission prompt was declined.
+  let onDisk = false;
+  try{ onDisk = await writeBookFile(); }catch(e){ onDisk = false; }
+  if (onDisk) localStorage.removeItem(BOOK_KEY); else saveLocal();
+  renderGh();
   // Not connected, or no sha read from the API: the browser copy is as far as
   // it goes. Saving without a sha would clobber the branch instead of failing
   // on a stale write.
@@ -956,6 +1023,8 @@ for (const slot of ["h","t"]){
   dz.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0], slot); });
 }
 renderGh();           // connect panel (never re-rendered by renderAll)
+// Restore the saved file handle, then repaint the panel so it shows the real state.
+if (FS_OK) idbBook("get").then(h => { bookHandle = h || null; renderGh(); }).catch(()=>{});
 loadBook();           // human data: weights, targets, theses
 loadSignals();        // machine data: prices, z-scores
 setInterval(loadSignals, 15*60*1000); // refresh every 15 min while page open

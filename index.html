@@ -223,7 +223,7 @@ button.ghost{background:none;color:var(--saffron)}
   <div class="drops">
     <div class="drop" id="drop-h" onclick="pick('h')">
       <div class="big">Holdings file</div>
-      <div class="sm">DL template <b>.xlsx</b> (Portfolio sheet)<br>or CSV: Ticker, Company, Sector, Industry, Analyst, Weight, FullWeight, Target, AddLevel, Conviction, Thesis, Strategy</div>
+      <div class="sm">DL template <b>.xlsx</b> (Portfolio sheet)<br>or CSV: Ticker, Company, Sector, Industry, Analyst, Weight, FullWeight, Target, AddLevel, Conviction, Thesis, Strategy<br>Optional <b>YfSymbol</b> — only if a ticker won't price on .NS or .BO</div>
     </div>
     <div class="drop" id="drop-t" onclick="pick('t')">
       <div class="big">Trades file</div>
@@ -852,7 +852,10 @@ function holdingsFromCSV(rows){
     industry:col("industry","subsector","theme"),
     analyst:col("analyst"), tp:col("target","targetprice","tp"), wt:col("weight","wt"),
     fullWt:col("fullweight","fullwt","targetweight"), addLvl:col("addlevel","addlvl","addprice"),
-    conv:col("conviction","conv"), thesis:col("thesis","comments","notes"), strategy:col("strategy","plan") };
+    conv:col("conviction","conv"), thesis:col("thesis","comments","notes"), strategy:col("strategy","plan"),
+    // Optional escape hatch for a ticker Yahoo can't resolve as TICKER.NS or
+    // TICKER.BO — build_signals.py uses this verbatim instead of guessing.
+    yfSymbol:col("yfsymbol","yahoosymbol","yahooticker") };
   if (c.tk<0 && c.co<0) throw "Holdings CSV needs a Ticker or Company column.";
   if (c.tp<0) throw "Holdings CSV needs a Target column.";
   const out = [];
@@ -875,6 +878,7 @@ function holdingsFromCSV(rows){
     out.push({ tk:String(g(c.tk)||g(c.co)).trim().toUpperCase(), co:String(g(c.co)||g(c.tk)).trim(),
       sector:g(c.sector), industry:g(c.industry), analyst:g(c.analyst), tp:num(g(c.tp)), wt,
       fullWt: pct(g(c.fullWt), fDiv) ?? wt, addLvl:num(g(c.addLvl)),
+      yfSymbol: g(c.yfSymbol) ? String(g(c.yfSymbol)).trim() : null,
       conv:g(c.conv), thesis:g(c.thesis)?String(g(c.thesis)):null,
       strategy:g(c.strategy)?String(g(c.strategy)):null });
   }

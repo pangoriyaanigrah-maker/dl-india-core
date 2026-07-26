@@ -34,10 +34,16 @@ def num(v):
         return None
 
 
-def frac(v):
-    """2.5 -> 0.025, 0.025 -> 0.025. Mirrors frac() in the dashboard."""
-    n = num(v)
-    return None if n is None else (n / 100 if abs(n) > 1.5 else n)
+def divisor(values):
+    """Is this weight column written as percents (2.5) or fractions (0.025)?
+
+    The whole column shares one convention, so decide once from the TOTAL: book
+    weights sum to ~1 as fractions and ~100 as percents. Judging each cell
+    against a 1.5 cutoff instead reads a legitimate 1.2% position as 120%.
+    Mirrors the same rule in the dashboard's holdingsFromCSV.
+    """
+    total = sum(n for n in (num(v) for v in values) if n is not None)
+    return 100.0 if total > 1.5 else 1.0
 
 
 def text(v):
@@ -53,15 +59,21 @@ def build(xlsx):
     if missing:
         raise SystemExit(f"Portfolio sheet is missing columns: {', '.join(missing)}")
 
+    body = [dict(zip(hdr, r)) for r in rows[1:]]
+    body = [d for d in body if text(d.get("Ticker")) or text(d.get("Company"))]
+    div = {"wt": divisor([d.get("Weight") for d in body]),
+           "fullWt": divisor([d.get("FullWeight") for d in body])}
+
     holdings = []
-    for r in rows[1:]:
-        d = dict(zip(hdr, r))
-        if not text(d.get("Ticker")) and not text(d.get("Company")):
-            continue  # blank row
+    for d in body:
         h = {}
         for head, key in FIELDS.items():
             v = d.get(head)
-            h[key] = frac(v) if key in PCT else num(v) if key in ("tp", "addLvl") else text(v)
+            if key in PCT:
+                n = num(v)
+                h[key] = None if n is None else n / div[key]
+            else:
+                h[key] = num(v) if key in ("tp", "addLvl") else text(v)
         h["tk"] = (h["tk"] or h["co"]).upper()
         h["co"] = h["co"] or h["tk"]
         h["wt"] = h["wt"] or 0.0

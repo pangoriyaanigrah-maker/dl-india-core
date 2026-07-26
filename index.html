@@ -773,7 +773,6 @@ function ghDisconnect(){
 const num = v => { if (v==null||v==="") return null;
   if (typeof v==="number") return v;
   const n = parseFloat(String(v).replace(/[,₹%\s]/g,"")); return isNaN(n)?null:n; };
-const frac = v => { const n=num(v); return n==null?null:(Math.abs(n)>1.5?n/100:n); };
 const asDate = v => v instanceof Date ? v : (v ? new Date(v) : null);
 const sideOf = v => { const s=String(v||"").trim().toLowerCase(); return s==="buy"?"Buy":s==="sell"?"Sell":null; };
 /* One parser per format, not per sheet: find the header row, then reuse the
@@ -799,13 +798,25 @@ function holdingsFromCSV(rows){
   if (c.tk<0 && c.co<0) throw "Holdings CSV needs a Ticker or Company column.";
   if (c.tp<0) throw "Holdings CSV needs a Target column.";
   const out = [];
-  for (const r of rows.slice(1)){
+  const body = rows.slice(1).filter(r => { const g = i => i>-1?r[i]:null;
+    return g(c.co) || g(c.tk); });
+  // A weight column is written either as fractions (0.025) or as percents (2.5),
+  // and the whole column shares one convention. Decide once from the column
+  // TOTAL — book weights sum to ~1 as fractions, ~100 as percents. Judging each
+  // cell against a 1.5 cutoff instead reads a legitimate 1.2% position as 120%.
+  const scale = col => {
+    const vals = body.map(r => num(col>-1 ? r[col] : null)).filter(v => v != null);
+    const sum = vals.reduce((a,v) => a + v, 0);
+    return sum > 1.5 ? 100 : 1;
+  };
+  const wDiv = scale(c.wt), fDiv = c.fullWt > -1 ? scale(c.fullWt) : wDiv;
+  const pct = (v, div) => { const n = num(v); return n == null ? null : n / div; };
+  for (const r of body){
     const g = i => i>-1?r[i]:null;
-    if (!g(c.co) && !g(c.tk)) continue;
-    const wt = frac(g(c.wt))??0;
+    const wt = pct(g(c.wt), wDiv) ?? 0;
     out.push({ tk:String(g(c.tk)||g(c.co)).trim().toUpperCase(), co:String(g(c.co)||g(c.tk)).trim(),
       sector:g(c.sector), industry:g(c.industry), analyst:g(c.analyst), tp:num(g(c.tp)), wt,
-      fullWt: frac(g(c.fullWt)) ?? wt, addLvl:num(g(c.addLvl)),
+      fullWt: pct(g(c.fullWt), fDiv) ?? wt, addLvl:num(g(c.addLvl)),
       conv:g(c.conv), thesis:g(c.thesis)?String(g(c.thesis)):null,
       strategy:g(c.strategy)?String(g(c.strategy)):null });
   }

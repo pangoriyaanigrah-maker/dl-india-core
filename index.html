@@ -164,36 +164,22 @@ button.act{font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-
 button.ghost{background:none;color:var(--saffron)}
 #preview{display:none}
 #preview .twrap{margin-top:14px}
-/* ---------- edit ---------- */
-#editbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-button.mini{font-size:12.5px;padding:7px 14px}
+/* ---------- github connect (Import tab) ---------- */
 .ghstat{font-family:'IBM Plex Mono';font-size:11px;color:var(--faint)}
 .ghstat b{color:var(--dim);font-weight:500}
-.editbtn{font-family:'IBM Plex Mono';font-size:11px;color:var(--saffron);background:none;
-  border:1px solid rgba(242,169,59,.4);border-radius:4px;padding:2px 7px;cursor:pointer;margin-left:8px}
-.editbtn:hover{background:rgba(242,169,59,.12)}
-.modal{position:fixed;inset:0;background:rgba(6,10,18,.75);z-index:50;
-  display:none;align-items:flex-start;justify-content:center;padding:36px 14px;overflow-y:auto}
-.modal.on{display:flex}
-.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  padding:20px;width:100%;max-width:660px}
-.modal h2{font-family:'Barlow Condensed';font-weight:700;font-size:22px;letter-spacing:.06em;
-  text-transform:uppercase;margin-bottom:14px}
 .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .f{display:flex;flex-direction:column;gap:4px}
 .f.wide{grid-column:1 / -1}
 .f label{font-family:'Barlow Condensed';font-weight:600;font-size:11.5px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--faint)}
-.f input,.f textarea{font-family:'IBM Plex Mono';font-size:13px;background:var(--ink);color:var(--text);
+.f input{font-family:'IBM Plex Mono';font-size:13px;background:var(--ink);color:var(--text);
   border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
-.f input:focus,.f textarea:focus{outline:none;border-color:var(--saffron)}
-.f textarea{min-height:84px;resize:vertical;line-height:1.5}
+.f input:focus{outline:none;border-color:var(--saffron)}
 .f .hint{font-family:'IBM Plex Mono';font-size:10px;color:var(--faint);line-height:1.5}
 .notice{font-family:'IBM Plex Mono';font-size:11.5px;border-radius:8px;padding:10px 12px;
   margin-top:14px;line-height:1.7;display:none}
 .notice.on{display:block}
 .notice.bad{color:var(--down);background:rgba(228,96,78,.1);border:1px solid rgba(228,96,78,.35)}
-.notice.warn{color:var(--amber);background:rgba(232,180,76,.1);border:1px solid rgba(232,180,76,.35)}
 @media (max-width:760px){
   .fgrid{grid-template-columns:1fr}
   .attr-grid{grid-template-columns:1fr}
@@ -230,7 +216,6 @@ button.mini{font-size:12.5px;padding:7px 14px}
   <div class="cols">
     <div>Name</div><div>Weight</div><div>CMP → Target</div><div>Upside</div><div>Signals</div><div>Status</div>
   </div>
-  <div id="editbar"></div>
   <div id="rows"></div>
   <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs the Nifty 500 universe.</div>
 </div>
@@ -238,7 +223,7 @@ button.mini{font-size:12.5px;padding:7px 14px}
   <div class="drops">
     <div class="drop" id="drop-h" onclick="pick('h')">
       <div class="big">Holdings file</div>
-      <div class="sm">DL template <b>.xlsx</b> (Portfolio sheet)<br>or CSV: Ticker, Company, Sector, Analyst, Weight, FullWeight, Target, AddLevel, Conviction, Thesis, Strategy</div>
+      <div class="sm">DL template <b>.xlsx</b> (Portfolio sheet)<br>or CSV: Ticker, Company, Sector, Industry, Analyst, Weight, FullWeight, Target, AddLevel, Conviction, Thesis, Strategy</div>
     </div>
     <div class="drop" id="drop-t" onclick="pick('t')">
       <div class="big">Trades file</div>
@@ -259,7 +244,7 @@ button.mini{font-size:12.5px;padding:7px 14px}
       <button class="act ghost" onclick="resetImport()">Clear</button>
     </div>
   </div>
-  <div class="sec" style="margin-top:26px">Live editing <small>saves straight to book.json in GitHub</small></div>
+  <div class="sec" style="margin-top:26px">GitHub connection <small>lets the Excel upload above save permanently</small></div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
     <b>Division of labour:</b> analysts own weights, targets, theses and entry/exit strategy (holdings file);
@@ -272,7 +257,6 @@ button.mini{font-size:12.5px;padding:7px 14px}
     <b>Note:</b> an upload replaces the whole book. Connected, it writes book.json to GitHub as one
     commit you can revert; not connected, it applies to this browser session only.
 </div>
-<div class="modal" id="modal" onclick="if(event.target===this) closeEditor()"><div class="box" id="modalbox"></div></div>
 <script>
 /* ================= DATA ================= */
 /* Static fallback only — used when the nightly feed doesn't carry a live
@@ -652,13 +636,6 @@ function renderPositions(){
   document.getElementById("asof").innerHTML =
     `${state.srcH} · ${state.srcT}<br>Signal feed: <b style="color:${feedMeta.live?"var(--up)":"var(--amber)"}">${feedMeta.live?"LIVE · ":""}${feedMeta.asof}</b>` +
     ` <button onclick="loadSignals()" style="font-family:'IBM Plex Mono';font-size:10px;color:var(--saffron);background:none;border:1px solid rgba(242,169,59,.4);border-radius:3px;padding:1px 6px;cursor:pointer;margin-left:6px">↻ refresh</button>`;
-  document.getElementById("editbar").innerHTML = canSave()
-    ? `<button class="act mini" onclick="openEditor(null)">+ Add position</button>
-       <button class="act ghost mini" onclick="editCash()">Cash ${fmt.w(state.cash)} ✎</button>
-       <span class="ghstat">saving to <b>${esc(gh.repo)}</b> @ <b>${esc(gh.branch||"main")}</b>${
-         lastSave ? ` · last save ${esc(lastSave)}` : ""}</span>`
-    : `<span class="ghstat">Read-only.${ghErr ? ` <b style="color:var(--down)">${esc(ghErr)}</b>` : ""}
-       Connect a GitHub token under Import to edit.</span>`;
   document.getElementById("rows").innerHTML = [...state.holdings].sort((a,b)=>b.wt-a.wt).map(h=>{
     const s = sig(h.tk), u = upside(h), [txt,cls,col] = statusOf(h);
     const cmp = s?.cmp;
@@ -682,9 +659,7 @@ function renderPositions(){
     const zc = v => v==null?"—":`<b style="color:${v>=0.5?"var(--up)":v<=-0.5?"var(--down)":"var(--dim)"}">${fmt.z(v)}</b>`;
     return `<div class="row" onclick="this.classList.toggle('open')">
       <div class="row-main">
-        <div class="nm2"><span class="tk">${esc(h.tk)}</span><span class="bucket">${bucketOf(h.tk)}</span><span class="built">${builtOf(h)}</span>${
-          canSave()?`<button class="editbtn" data-tk="${esc(h.tk)}"
-            onclick="event.stopPropagation();openEditor(this.dataset.tk)" title="Edit ${esc(h.tk)}">✎</button>`:""}
+        <div class="nm2"><span class="tk">${esc(h.tk)}</span><span class="bucket">${bucketOf(h.tk)}</span><span class="built">${builtOf(h)}</span>
           <div class="co">${esc(h.co)}</div>
           <div class="meta">${esc(h.industry||h.sector||"—")} · ${esc(h.analyst||"—")} · Conviction ${esc(h.conv||"—")}</div></div>
         <div class="cell"><div class="lbl">Weight</div>${(h.wt*100).toFixed(1)}%<div class="sub">full ${h.fullWt!=null?fmt.w(h.fullWt):"—"}</div></div>
@@ -708,7 +683,7 @@ function renderAll(){ renderOverview(); renderExposures(); renderPositions(); }
    A fine-grained PAT lives in this browser's localStorage; no token means the
    dashboard is read-only, which is the correct default for viewers. */
 const GH_KEY = "dl_gh";
-let gh = null, bookSha = null, bookSource = "", ghErr = "", lastSave = "";
+let gh = null, bookSha = null, bookSource = "", ghErr = "";
 try { gh = JSON.parse(localStorage.getItem(GH_KEY) || "null"); } catch(e){ gh = null; }
 const canEdit = () => !!(gh && gh.repo && gh.token);
 // Saving needs a sha we actually read from the API. Without one a PUT would
@@ -745,152 +720,6 @@ async function saveBook(message){
   const j = await ghFetch("PUT", { message, content: b64enc(bookJSON()),
                                    sha: bookSha, branch: gh.branch || "main" });
   bookSha = j.content.sha;
-  lastSave = new Date().toLocaleTimeString("en-IN", {hour:"2-digit", minute:"2-digit"});
-}
-/* [key, label, kind, hint] — kind drives parsing as well as the input type. */
-const EFIELDS = [
-  ["tk","Ticker","text","NSE symbol. Must match a key in signals.json or the row reads NO FEED."],
-  ["co","Company","text",""],
-  ["sector","Sector","text","Coarse. Must match a benchmark sector or active weight is meaningless."],
-  ["industry","Industry","text","Your thematic label. Display only, never used in the maths."],
-  ["analyst","Analyst","text",""],
-  ["conv","Conviction","text","High / Medium / Low — the prefix drives the composition colour."],
-  ["wt","Weight %","num",""],
-  ["fullWt","Full weight %","num","Intended full position. 0 = exiting. Blank copies Weight."],
-  ["tp","Target ₹","num","Blank = no target; upside and status go dark for this name."],
-  ["addLvl","Add level ₹","num","Blank = the add is event-gated, not price-gated."],
-  ["yfSymbol","Yahoo symbol","text","Override, e.g. MACFOS.BO. Blank tries TICKER.NS then TICKER.BO."],
-  ["thesis","Thesis","area",""],
-  ["strategy","Strategy","area",""],
-];
-const PCT = new Set(["wt","fullWt"]);
-let editTk = null;                       // ticker under edit; null = new position
-
-function openEditor(tk){
-  if (!canSave()) return;
-  editTk = tk ?? null;
-  const h = tk != null ? state.holdings.find(x => x.tk === tk) : {};
-  if (tk != null && !h) return;
-  const shown = f => { const v = h[f[0]];
-    return v == null ? "" : PCT.has(f[0]) ? +(v * 100).toFixed(4) : v; };
-  document.getElementById("modalbox").innerHTML = `
-    <h2>${tk != null ? "Edit " + esc(tk) : "Add position"}</h2>
-    <div class="fgrid">${EFIELDS.map(f => `
-      <div class="f${f[2] === "area" ? " wide" : ""}">
-        <label>${f[1]}</label>
-        ${f[2] === "area"
-          ? `<textarea id="e-${f[0]}">${esc(shown(f))}</textarea>`
-          : `<input id="e-${f[0]}" value="${esc(shown(f))}"${f[2] === "num" ? ' inputmode="decimal"' : ""}>`}
-        ${f[3] ? `<span class="hint">${f[3]}</span>` : ""}
-      </div>`).join("")}
-    </div>
-    <div class="notice" id="e-msg"></div>
-    <div class="btnrow">
-      <button class="act" id="e-save" onclick="commitEdit()">Save</button>
-      <button class="act ghost" onclick="closeEditor()">Cancel</button>
-      ${tk != null ? `<button class="act ghost" style="border-color:rgba(228,96,78,.5);color:var(--down)"
-         onclick="deletePosition()">Delete</button>` : ""}
-    </div>`;
-  document.getElementById("modal").classList.add("on");
-}
-function closeEditor(){ document.getElementById("modal").classList.remove("on"); }
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeEditor(); });
-
-function readEditor(){
-  const g = id => document.getElementById("e-" + id).value.trim();
-  const n = id => { const v = g(id); if (v === "") return null;
-    const x = parseFloat(v.replace(/[,₹%\s]/g, "")); return isNaN(x) ? NaN : x; };
-  const pct = id => { const x = n(id); return x == null || isNaN(x) ? x : x / 100; };
-  const wt = pct("wt");
-  return { tk: g("tk").toUpperCase(), co: g("co") || null, sector: g("sector") || null,
-    industry: g("industry") || null, analyst: g("analyst") || null, conv: g("conv") || null,
-    wt, fullWt: pct("fullWt") ?? wt, tp: n("tp"), addLvl: n("addLvl"),
-    yfSymbol: g("yfSymbol") || null, thesis: g("thesis") || null, strategy: g("strategy") || null };
-}
-function validateHolding(h){
-  const errs = [], warns = [];
-  if (!h.tk) errs.push("Ticker is required.");
-  else if (state.holdings.some(x => x.tk === h.tk && x.tk !== editTk))
-    errs.push(`${h.tk} is already in the book.`);
-  for (const [k, lab] of [["wt","Weight"], ["fullWt","Full weight"]]){
-    const v = h[k];
-    if (v == null || Number.isNaN(v)) errs.push(`${lab} must be a number.`);
-    else if (v < 0 || v > 1) errs.push(`${lab} must be between 0 and 100%.`);
-  }
-  for (const [k, lab] of [["tp","Target"], ["addLvl","Add level"]]){
-    const v = h[k];
-    if (Number.isNaN(v)) errs.push(`${lab} must be a number, or blank.`);
-    else if (v != null && v <= 0) errs.push(`${lab} must be greater than 0, or blank.`);
-  }
-  if (h.tk && !SIGNALS[h.tk])
-    warns.push(`No signal feed for ${h.tk} — it shows NO FEED until build_signals.py picks it up ` +
-               `tonight. If TICKER.NS and TICKER.BO both fail, set a Yahoo symbol.`);
-  const total = state.holdings.reduce((a, x) => a + (x.tk === editTk ? 0 : x.wt), 0) +
-                (h.wt || 0) + state.cash;
-  if (Math.abs(total - 1) > 0.005)
-    warns.push(`Weights + cash come to ${(total * 100).toFixed(1)}%, not 100%. Adjust cash if that isn't intended.`);
-  return { errs, warns };
-}
-// Normalise through ?? null: a field absent from the stored book and one explicitly
-// set to null are the same thing, and shouldn't read as an edit in the commit message.
-const changed = (a, b) => a ? Object.keys(b)
-  .filter(k => JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) : [];
-
-async function commitEdit(){
-  const h = readEditor(), msg = document.getElementById("e-msg");
-  const { errs, warns } = validateHolding(h);
-  if (errs.length){
-    msg.className = "notice bad on";
-    msg.innerHTML = errs.map(esc).join("<br>");
-    return;
-  }
-  // Warnings are advisory, not blocking — surface once, then let Save through.
-  if (warns.length && msg.dataset.warned !== "1"){
-    msg.className = "notice warn on";
-    msg.innerHTML = warns.map(esc).join("<br>") + "<br><b>Press Save again to go ahead.</b>";
-    msg.dataset.warned = "1";
-    return;
-  }
-  const btn = document.getElementById("e-save");
-  btn.disabled = true; btn.textContent = "Saving…";
-  const before = state.holdings.slice(), i = state.holdings.findIndex(x => x.tk === editTk);
-  const fields = i > -1 ? changed(state.holdings[i], h) : [];
-  if (i > -1 && !fields.length){ closeEditor(); return; }   // no diff, no commit
-  if (i > -1) state.holdings[i] = h; else state.holdings.push(h);
-  try{
-    await saveBook(editTk == null ? `add ${h.tk}`
-      : `edit ${h.tk}${fields.length ? " — " + fields.join(", ") : ""}`);
-    closeEditor(); renderAll();
-  }catch(e){
-    state.holdings = before;               // the commit didn't land; don't pretend it did
-    msg.className = "notice bad on"; msg.textContent = "Save failed: " + e.message;
-    btn.disabled = false; btn.textContent = "Save";
-  }
-}
-async function deletePosition(){
-  const h = state.holdings.find(x => x.tk === editTk);
-  if (!h) return;
-  if (!confirm(`Delete ${h.tk}${h.co ? " (" + h.co + ")" : ""} from the book?\n\n` +
-               `This commits to GitHub. Recoverable from git history, but not from this screen.`)) return;
-  const before = state.holdings.slice();
-  state.holdings = state.holdings.filter(x => x.tk !== editTk);
-  try{ await saveBook(`remove ${h.tk}`); closeEditor(); renderAll(); }
-  catch(e){
-    state.holdings = before;
-    const m = document.getElementById("e-msg");
-    m.className = "notice bad on"; m.textContent = "Delete failed: " + e.message;
-  }
-}
-async function editCash(){
-  const cur = (state.cash * 100).toFixed(1);
-  const v = prompt("Cash as % of NAV:", cur);
-  if (v == null) return;
-  const n = parseFloat(String(v).replace(/[%\s]/g, ""));
-  if (isNaN(n) || n < 0 || n > 100) return alert("Cash must be a number between 0 and 100.");
-  const before = state.cash;
-  state.cash = n / 100;
-  try{ await saveBook(`cash ${cur}% → ${n}%`); renderAll(); }
-  catch(e){ state.cash = before; alert("Save failed: " + e.message); }
 }
 /* ---- connect / disconnect (Import tab). Never re-rendered by renderAll,
    which would wipe whatever is half-typed in the token box. ---- */
@@ -900,7 +729,7 @@ function renderGh(){
   el.innerHTML = canEdit()
     ? `<div class="ghstat">Connected to <b>${esc(gh.repo)}</b> on branch <b>${esc(gh.branch || "main")}</b>.
          ${ghErr ? `<br><b style="color:var(--down)">${esc(ghErr)}</b>`
-                 : "Edit controls are live on the Positions tab."}</div>
+                 : "Excel uploads on this tab now save to GitHub."}</div>
        <div class="btnrow"><button class="act ghost" onclick="ghDisconnect()">Disconnect</button></div>`
     : `<div class="fgrid">
          <div class="f"><label>Repository</label><input id="gh-repo" placeholder="owner/dl-india-core"></div>
@@ -1024,7 +853,10 @@ function handleFile(file, slot){
       if (slot==="h" && (!holdings || !holdings.length)) throw "No valid holdings rows found.";
       if (slot==="t" && (!trades || !trades.length)) throw "No valid trade rows found.";
       staged = { ...state,
-        ...(holdings ? {holdings, srcH:"Holdings: "+file.name} : {}),
+        // Excel is the only input now, so it owns cash too: same rule as
+        // xlsx_to_book.py, cash = whatever the weights don't claim.
+        ...(holdings ? {holdings, cash: Math.max(0, 1 - holdings.reduce((a,h)=>a+h.wt,0)),
+                        srcH:"Holdings: "+file.name} : {}),
         ...(trades ? {trades, srcT:"Trades: "+file.name} : {}) };
       const missing = (holdings||[]).filter(h=>!sig(h.tk)).map(h=>h.tk);
       msg.className = "msg ok";

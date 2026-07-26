@@ -244,7 +244,7 @@ button.ghost{background:none;color:var(--saffron)}
       <button class="act ghost" onclick="resetImport()">Clear</button>
     </div>
   </div>
-  <div class="sec" style="margin-top:26px">Saved book <small>uploads persist in this browser · connect GitHub to share them</small></div>
+  <div class="sec" style="margin-top:26px">Saved book <small>every upload is kept and reloaded automatically</small></div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
     <b>Division of labour:</b> analysts own weights, targets, theses and entry/exit strategy (holdings file);
@@ -255,9 +255,10 @@ button.ghost{background:none;color:var(--saffron)}
     spanning large to small cap (a proxy, not the official Nifty 500 cross-section), and writes
     signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
     not touch the signal feed.<br>
-    <b>Note:</b> an upload replaces the whole book and is remembered by this browser, so it loads
-    again next time you open the dashboard. Connected to GitHub, it also lands as one commit you
-    can revert — and that copy wins, so the same book follows you to another machine.
+    <b>Saving is automatic.</b> An upload replaces the whole book and is remembered, so it loads
+    again every time you open the dashboard — no button to press, nothing to set up. Point it at
+    book.json as well and the nightly price job sees stocks you add; connect GitHub and the same
+    book follows you to another machine, as commits you can revert.
 </div>
 <script>
 /* ================= DATA ================= */
@@ -783,18 +784,22 @@ function renderGh(){
   if (!el) return;
   const mini = "font-size:11px;padding:3px 10px;margin-left:8px";
   let head = bookHandle
-    ? `<div class="ghstat" style="margin-bottom:12px">Uploads write straight to
-         <b>${esc(bookHandle.name)}</b> on disk — the copy build_signals.py reads, so new tickers
-         get prices from tonight's run.
+    ? `<div class="ghstat" style="margin-bottom:12px">
+         <b style="color:var(--up)">✓ Uploads are saved automatically</b> — written straight to
+         <b>${esc(bookHandle.name)}</b> on disk and reloaded every time you open the dashboard.
+         That's the copy build_signals.py reads, so a newly added ticker gets prices tonight.
          <button class="act ghost" style="${mini}" onclick="pickBookFile()">Change file</button>
          <button class="act ghost" style="${mini}" onclick="forgetBookFile()">Stop</button></div>`
     : FS_OK
-    ? `<div class="ghstat" style="margin-bottom:12px">Uploads are kept in this browser only.
-         Point them at <b>book.json</b> in this folder and they become a real file —
-         which is what the nightly price job reads.
-         <button class="act" style="${mini}" onclick="pickBookFile()">Write to book.json</button></div>`
-    : `<div class="ghstat" style="margin-bottom:12px">This browser can't write files
-         (Chrome or Edge can). Uploads are kept in the browser instead.</div>`;
+    ? `<div class="ghstat" style="margin-bottom:12px">
+         <b style="color:var(--up)">✓ Uploads are saved automatically</b> and reload every time you
+         open the dashboard. Nothing to set up. They live in this browser — optionally point them at
+         <b>book.json</b> as well, so the nightly price job can see stocks you add.
+         <button class="act ghost" style="${mini}" onclick="pickBookFile()">Also write to book.json</button></div>`
+    : `<div class="ghstat" style="margin-bottom:12px">
+         <b style="color:var(--up)">✓ Uploads are saved automatically</b> and reload every time you
+         open the dashboard. They live in this browser — Chrome or Edge can also write
+         <b>book.json</b> directly, which this browser can't.</div>`;
   const saved = localStorage.getItem(BOOK_KEY);
   if (saved){
     let d = {};

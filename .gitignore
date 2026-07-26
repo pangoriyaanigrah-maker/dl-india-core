@@ -6,8 +6,9 @@ __pycache__/
 # and a binary xlsx can't be diffed or reviewed in a PR.
 Holdings_File.xlsx
 
-# Throwaway fixture from make_test_xlsx.py — regenerate, don't version.
+# Throwaway fixtures from make_test_xlsx.py — regenerate, don't version.
 Holdings_File_TEST.xlsx
+Trades_File_TEST.xlsx
 
 # Editor config; start_dashboard.bat is the supported way to run this.
 .claude/

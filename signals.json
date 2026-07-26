@@ -1,5 +1,5 @@
 {
- "asof": "26 Jul 2026, 19:13 IST",
+ "asof": "26 Jul 2026, 20:18 IST",
  "note": "z-scores are cross-sectional vs an NSE proxy universe, not the official Nifty 500. value = cheapness on P/E, P/B, EV/EBITDA; quality = ROE, leverage, net margin (no accruals or margin-stability term); momentum = (12M-1M) + 6M price return, needs 1y of history.",
  "errors": [],
  "signals": {
@@ -7,7 +7,7 @@
    "cmp": 250.11,
    "mcap": 4196,
    "lo": 145.46,
-   "val": 1.19,
+   "val": 1.2,
    "momo": 0.92,
    "qual": -1.41
   },
@@ -31,8 +31,8 @@
    "cmp": 527.35,
    "mcap": 3956,
    "lo": 310.55,
-   "val": 1.18,
-   "momo": 1.47,
+   "val": 1.19,
+   "momo": 1.48,
    "qual": -0.54
   },
   "ABSMARINE": {
@@ -40,7 +40,7 @@
    "mcap": 808,
    "lo": 149.55,
    "val": 0.83,
-   "momo": 0.51,
+   "momo": 0.52,
    "qual": null
   },
   "DEEPINDS": {
@@ -56,16 +56,16 @@
    "mcap": 4380,
    "lo": 68.15,
    "val": 0.76,
-   "momo": 2.64,
+   "momo": 2.65,
    "qual": -0.46
   },
   "ROBU": {
    "cmp": 1171.65,
    "mcap": 1214,
    "lo": 636.36,
-   "val": -0.89,
+   "val": -0.9,
    "momo": 1.7,
-   "qual": 0.37
+   "qual": 0.38
   },
   "VOEPL": {
    "cmp": 484.05,
@@ -80,8 +80,8 @@
    "mcap": 3522,
    "lo": 894.0,
    "val": 0.49,
-   "momo": 1.27,
-   "qual": -0.18
+   "momo": 1.28,
+   "qual": -0.17
   },
   "AIMTRON": {
    "cmp": 1283.95,
@@ -95,7 +95,7 @@
    "cmp": 178.1,
    "mcap": 930,
    "lo": 134.63,
-   "val": -0.3,
+   "val": -0.31,
    "momo": -0.75,
    "qual": -0.82
   },
@@ -121,24 +121,24 @@
    "lo": 143.92,
    "val": 0.2,
    "momo": null,
-   "qual": 0.12
+   "qual": 0.13
   }
  },
  "bench_sect": {
-  "Financial Services": 0.2793,
-  "Industrials": 0.1277,
-  "Energy": 0.1113,
-  "Consumer Cyclical": 0.0975,
-  "Technology": 0.0907,
-  "Consumer Defensive": 0.081,
-  "Basic Materials": 0.0748,
-  "Healthcare": 0.0687,
-  "Communication Services": 0.043,
-  "Utilities": 0.0258
+  "Financial Services": 0.2721,
+  "Industrials": 0.1289,
+  "Energy": 0.1123,
+  "Consumer Cyclical": 0.0991,
+  "Technology": 0.0916,
+  "Consumer Defensive": 0.0818,
+  "Basic Materials": 0.0755,
+  "Healthcare": 0.0693,
+  "Communication Services": 0.0434,
+  "Utilities": 0.0261
  },
  "bench_size": {
-  "Large": 0.9133,
-  "Mid": 0.0665,
-  "Small": 0.0202
+  "Large": 0.9118,
+  "Mid": 0.0671,
+  "Small": 0.0211
  }
 }

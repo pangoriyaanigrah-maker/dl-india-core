@@ -244,7 +244,7 @@ button.ghost{background:none;color:var(--saffron)}
       <button class="act ghost" onclick="resetImport()">Clear</button>
     </div>
   </div>
-  <div class="sec" style="margin-top:26px">GitHub connection <small>lets the Excel upload above save permanently</small></div>
+  <div class="sec" style="margin-top:26px">Saved book <small>uploads persist in this browser · connect GitHub to share them</small></div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
     <b>Division of labour:</b> analysts own weights, targets, theses and entry/exit strategy (holdings file);
@@ -255,8 +255,9 @@ button.ghost{background:none;color:var(--saffron)}
     spanning large to small cap (a proxy, not the official Nifty 500 cross-section), and writes
     signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
     not touch the signal feed.<br>
-    <b>Note:</b> an upload replaces the whole book. Connected, it writes book.json to GitHub as one
-    commit you can revert; not connected, it applies to this browser session only.
+    <b>Note:</b> an upload replaces the whole book and is remembered by this browser, so it loads
+    again next time you open the dashboard. Connected to GitHub, it also lands as one commit you
+    can revert — and that copy wins, so the same book follows you to another machine.
 </div>
 <script>
 /* ================= DATA ================= */
@@ -317,15 +318,30 @@ function applyFeed(j, srcTag){
    (price, mcap, z-scores) and is never hand-edited. Same fetch pattern as
    loadSignals: fetch, validate, render; a failure leaves a visible reason. */
 let state = { holdings: [], trades: [], cash: 0, srcH: "loading book.json\u2026", srcT: "" };
+/* An upload is kept in this browser so the book survives closing the tab with
+   no setup at all. Precedence on load: GitHub (shared truth) > this saved copy
+   > the book.json shipped in the folder. */
+const BOOK_KEY = "dl_book";
+const saveLocal = () => { try{ localStorage.setItem(BOOK_KEY, bookJSON()); }catch(e){} };
+function clearLocal(){ localStorage.removeItem(BOOK_KEY); loadBook(); }
+
 async function loadBook(){
-  let j = null;
+  let j = null, from = "book.json";
   ghErr = ""; bookSha = null;
   // Connected: read through the API. It hands back the sha the next save needs,
   // and it's authoritative \u2014 a CDN can serve a stale book.json for minutes after
   // a commit, which reads as "my edit didn't save".
   if (canEdit()){
-    try{ const g = await ghFetch("GET"); j = JSON.parse(b64dec(g.content)); bookSha = g.sha; }
+    try{ const g = await ghFetch("GET"); j = JSON.parse(b64dec(g.content)); bookSha = g.sha;
+         from = "GitHub"; }
     catch(e){ ghErr = e.message; }        // fall through to the published copy, read-only
+  }
+  if (!j){
+    const saved = localStorage.getItem(BOOK_KEY);
+    if (saved){
+      try{ j = JSON.parse(saved); from = "saved in this browser"; }
+      catch(e){ localStorage.removeItem(BOOK_KEY); }   // corrupt: don't wedge the app
+    }
   }
   if (!j){
     try{
@@ -345,10 +361,11 @@ async function loadBook(){
     renderAll(); return;
   }
   const trades = (j.trades || []).map(t => ({...t, date: asDate(t.date)}));
+  const label = j.source && from !== "book.json" ? `${j.source} \u00b7 ${from}` : from;
   state = { holdings: j.holdings, trades, cash: j.cash ?? 0,
-    srcH: `Holdings: book.json \u00b7 ${j.holdings.length} names${j.updated ? " \u00b7 " + j.updated : ""}`,
-    srcT: trades.length ? `Trades: book.json \u00b7 ${trades.length}` : "No trades recorded" };
-  renderAll();
+    srcH: `Holdings: ${label} \u00b7 ${j.holdings.length} names${j.updated ? " \u00b7 " + j.updated : ""}`,
+    srcT: trades.length ? `Trades: ${trades.length}` : "No trades recorded" };
+  renderAll(); renderGh();
 }
 let staged = null, activeSlot = null;
 /* ================= HELPERS ================= */
@@ -715,10 +732,23 @@ async function saveBook(message){
 function renderGh(){
   const el = document.getElementById("ghpanel");
   if (!el) return;
-  el.innerHTML = canEdit()
+  const saved = localStorage.getItem(BOOK_KEY);
+  let head = "";
+  if (saved){
+    let d = {};
+    try{ d = JSON.parse(saved); }catch(e){}
+    head = `<div class="ghstat" style="margin-bottom:12px">
+        Saved copy in this browser: <b>${esc(d.source || "uploaded file")}</b> ·
+        ${(d.holdings||[]).length} names · ${(d.trades||[]).length} trades${d.updated ? " · " + esc(d.updated) : ""}.
+        It loads automatically every time you open the dashboard.
+        <button class="act ghost" style="font-size:11px;padding:3px 10px;margin-left:8px"
+          onclick="if(confirm('Discard the saved upload and go back to the book.json in this folder?')) clearLocal()"
+          >Reset to book.json</button></div>`;
+  }
+  el.innerHTML = head + (canEdit()
     ? `<div class="ghstat">Connected to <b>${esc(gh.repo)}</b> on branch <b>${esc(gh.branch || "main")}</b>.
          ${ghErr ? `<br><b style="color:var(--down)">${esc(ghErr)}</b>`
-                 : "Excel uploads on this tab now save to GitHub."}</div>
+                 : "Uploads also commit to GitHub, so they survive a new machine."}</div>
        <div class="btnrow"><button class="act ghost" onclick="ghDisconnect()">Disconnect</button></div>`
     : `<div class="fgrid">
          <div class="f"><label>Repository</label><input id="gh-repo" placeholder="owner/dl-india-core"></div>
@@ -730,7 +760,7 @@ function renderGh(){
              so don't connect on a shared machine.</span></div>
        </div>
        <div class="notice" id="gh-msg"></div>
-       <div class="btnrow"><button class="act" onclick="ghConnect()">Connect</button></div>`;
+       <div class="btnrow"><button class="act" onclick="ghConnect()">Connect</button></div>`);
 }
 function ghNote(t){
   const m = document.getElementById("gh-msg");
@@ -897,8 +927,10 @@ function handleFile(file, slot){
 async function commit(){
   if (!staged) return;
   state = staged; staged = null; renderAll(); showView("ov");
-  // Read-only, or no sha read from the API: stay session-local. Saving without
-  // a sha would clobber the branch instead of failing on a stale write.
+  saveLocal(); renderGh();          // survives closing the tab, with no setup
+  // Not connected, or no sha read from the API: the browser copy is as far as
+  // it goes. Saving without a sha would clobber the branch instead of failing
+  // on a stale write.
   if (!canEdit() || !bookSha || ghErr) return;
   const msg = document.getElementById("msg");
   try{

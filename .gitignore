@@ -8,3 +8,6 @@ Holdings_File.xlsx
 
 # Throwaway fixture from make_test_xlsx.py — regenerate, don't version.
 Holdings_File_TEST.xlsx
+
+# Editor config; start_dashboard.bat is the supported way to run this.
+.claude/

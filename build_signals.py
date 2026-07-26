@@ -63,7 +63,7 @@ KANSAINER BERGEPAINT INDIGO GESHIP SCI
 
 
 # ---------------------------------------------------------------- maths
-def winsorize(xs, lo=0.05, hi=0.95):
+def winsorize(xs, lo=0.05):
     """Clip to the 5th/95th percentile. Indian small caps throw 500x P/Es; one
     of them otherwise eats the whole standard deviation and flattens every
     other name's z-score to roughly zero."""
@@ -103,7 +103,7 @@ def zscores(raw, floor=5, clip=True):
 
 def blend(*maps):
     """Average the z-maps that have a value for a key; None if none do."""
-    keys = set().union(*(m.keys() for m in maps)) if maps else set()
+    keys = set().union(*(m.keys() for m in maps))
     out = {}
     for k in keys:
         vals = [m[k] for m in maps if m.get(k) is not None]
@@ -121,25 +121,17 @@ def momentum(closes):
 
 
 # ---------------------------------------------------------------- io
-def load_book(path=BOOK):
+def load_book():
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(BOOK, encoding="utf-8") as f:
             holdings = json.load(f)["holdings"]
     except FileNotFoundError:
-        sys.exit(f"{path} not found — run xlsx_to_book.py first.")
+        sys.exit(f"{BOOK} not found — upload a holdings file on the dashboard's Import tab.")
     except (KeyError, json.JSONDecodeError) as e:
-        sys.exit(f"{path} is not a valid book: {e}")
+        sys.exit(f"{BOOK} is not a valid book: {e}")
     if not holdings:
-        sys.exit(f"{path} has no holdings.")
+        sys.exit(f"{BOOK} has no holdings.")
     return holdings
-
-
-def candidates(tk, override):
-    """Yahoo symbols to try. Most NSE names are TK.NS; SME and recently listed
-    names are often only on BSE, hence the .BO fallback."""
-    if override:
-        return [override]
-    return [f"{tk}.NS", f"{tk}.BO"]
 
 
 def fetch(symbols):
@@ -180,9 +172,11 @@ def num(d, *keys):
 
 def build():
     holdings = load_book()
-    wanted = {}                                # portfolio ticker -> [candidates]
-    for h in holdings:
-        wanted[h["tk"]] = candidates(h["tk"], h.get("yfSymbol"))
+    # Yahoo symbols to try per holding. Most NSE names are TK.NS; SME and
+    # recently listed names are often only on BSE, hence the .BO fallback.
+    wanted = {h["tk"]: [h["yfSymbol"]] if h.get("yfSymbol")
+                       else [f'{h["tk"]}.NS', f'{h["tk"]}.BO']
+              for h in holdings}
 
     universe = [f"{t}.NS" for t in UNIVERSE]
     symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs})

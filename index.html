@@ -271,35 +271,26 @@ let BENCH_SIZE = BENCH_SIZE_FALLBACK;
 let benchLive = false; // true once a live bench_sect/bench_size arrives from the feed
 /* ===== LIVE SIGNAL FEED =====
    Nightly builder (build_signals.py, GitHub Actions cron) writes signals.json.
-   Set FEED_URL to the raw URL of that file (GitHub raw / Vercel / any static host).
-   Empty FEED_URL, or fetch failure, falls back to the embedded snapshot below. */
-const FEED_URL = ""; // e.g. "https://raw.githubusercontent.com/<user>/<repo>/main/signals.json"
-// Intentionally EMPTY — these are real holdings now, and no fabricated price/
-// z-score belongs in the file. Every row shows "NO FEED" / "no price feed"
-// (the app already handles that gracefully) until build_signals.py's next
-// run writes real numbers for these tickers into signals.json.
-const SIGNALS_FALLBACK = {};
-let SIGNALS = SIGNALS_FALLBACK;
+   No fabricated prices ship in this file: until that script runs, every row
+   reads "NO FEED", which the app already renders gracefully. */
+let SIGNALS = {};
 let feedMeta = { live:false, asof:"no signal feed loaded yet — run build_signals.py" };
 async function loadSignals(){
   // Connected: the GitHub copy is the truth — the Actions cron commits fresh
   // prices there nightly, while the copy on local disk only moves on git pull.
-  if (typeof canEdit === "function" && canEdit()){
+  if (canEdit()){
     try{
       const g = await ghFetch("GET", null, "signals.json");
       applyFeed(JSON.parse(b64dec(g.content)), " · via GitHub");
       return;
-    }catch(e){ /* fall through to the local/hosted copy */ }
+    }catch(e){ /* fall through to the local copy */ }
   }
-  const urls = FEED_URL ? [FEED_URL] : ["signals.json"]; // same-dir fallback when hosted together
-  for (const u of urls){
-    try{
-      const r = await fetch(u, {cache:"no-store"});
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      applyFeed(await r.json(), "");
-      return;
-    }catch(e){ /* try next / fall back */ }
-  }
+  try{
+    const r = await fetch("signals.json", {cache:"no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    applyFeed(await r.json(), "");
+    return;
+  }catch(e){ /* fall through to the no-feed state */ }
   feedMeta = { live:false, asof:"no signal feed loaded yet — run build_signals.py (or feed unreachable)" };
   BENCH_SECT = BENCH_SECT_FALLBACK; BENCH_SIZE = BENCH_SIZE_FALLBACK; benchLive = false;
   renderAll();
@@ -352,7 +343,6 @@ async function loadBook(){
       srcH: "book.json has no holdings", srcT: "" };
     renderAll(); return;
   }
-  bookSource = j.source || "";
   const trades = (j.trades || []).map(t => ({...t, date: asDate(t.date)}));
   state = { holdings: j.holdings, trades, cash: j.cash ?? 0,
     srcH: `Holdings: book.json \u00b7 ${j.holdings.length} names${j.updated ? " \u00b7 " + j.updated : ""}`,
@@ -683,12 +673,9 @@ function renderAll(){ renderOverview(); renderExposures(); renderPositions(); }
    A fine-grained PAT lives in this browser's localStorage; no token means the
    dashboard is read-only, which is the correct default for viewers. */
 const GH_KEY = "dl_gh";
-let gh = null, bookSha = null, bookSource = "", ghErr = "";
+let gh = null, bookSha = null, ghErr = "";
 try { gh = JSON.parse(localStorage.getItem(GH_KEY) || "null"); } catch(e){ gh = null; }
 const canEdit = () => !!(gh && gh.repo && gh.token);
-// Saving needs a sha we actually read from the API. Without one a PUT would
-// clobber whatever is on the branch instead of failing on a stale write.
-const canSave = () => canEdit() && !!bookSha && !ghErr;
 
 const b64enc = s => { let o = "";
   for (const b of new TextEncoder().encode(s)) o += String.fromCharCode(b);
@@ -713,7 +700,7 @@ async function ghFetch(method, body, path = "book.json"){
 }
 const bookJSON = () => JSON.stringify({
   updated: new Date().toISOString().slice(0,10),
-  source: bookSource || "edited in dashboard",
+  source: state.srcH.replace(/^Holdings: /, ""),
   cash: state.cash, holdings: state.holdings, trades: state.trades }, null, 1);
 
 async function saveBook(message){
@@ -899,7 +886,9 @@ function handleFile(file, slot){
 async function commit(){
   if (!staged) return;
   state = staged; staged = null; renderAll(); showView("ov");
-  if (!canSave()) return;                  // read-only: session-local, as advertised
+  // Read-only, or no sha read from the API: stay session-local. Saving without
+  // a sha would clobber the branch instead of failing on a stale write.
+  if (!canEdit() || !bookSha || ghErr) return;
   const msg = document.getElementById("msg");
   try{
     await saveBook(`bulk: replace book from ${state.srcH.replace(/^Holdings: /, "")}`);

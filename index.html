@@ -268,8 +268,7 @@ button.mini{font-size:12.5px;padding:7px 14px}
     Signal feed is live: a GitHub Actions cron (build_signals.py) hits Yahoo Finance nightly for
     prices/momentum and fundamentals, computes z-scores vs an ~65-name NSE universe (a proxy, not the
     official Nifty 500 cross-section), and writes signals.json. Re-uploading a holdings file here
-    replaces weights/targets/theses only — it does not touch the signal feed.
-    replaces weights/targets/theses only \u2014 it does not touch the signal feed.<br>
+    replaces weights/targets/theses only — it does not touch the signal feed.<br>
     <b>Note:</b> an upload replaces the whole book. Connected, it writes book.json to GitHub as one
     commit you can revert; not connected, it applies to this browser session only.
 </div>
@@ -299,30 +298,41 @@ const SIGNALS_FALLBACK = {};
 let SIGNALS = SIGNALS_FALLBACK;
 let feedMeta = { live:false, asof:"no signal feed loaded yet — run build_signals.py" };
 async function loadSignals(){
+  // Connected: the GitHub copy is the truth — the Actions cron commits fresh
+  // prices there nightly, while the copy on local disk only moves on git pull.
+  if (typeof canEdit === "function" && canEdit()){
+    try{
+      const g = await ghFetch("GET", null, "signals.json");
+      applyFeed(JSON.parse(b64dec(g.content)), " · via GitHub");
+      return;
+    }catch(e){ /* fall through to the local/hosted copy */ }
+  }
   const urls = FEED_URL ? [FEED_URL] : ["signals.json"]; // same-dir fallback when hosted together
   for (const u of urls){
     try{
       const r = await fetch(u, {cache:"no-store"});
       if (!r.ok) throw new Error("HTTP " + r.status);
-      const j = await r.json();
-      if (!j.signals || !Object.keys(j.signals).length) throw new Error("empty feed");
-      SIGNALS = j.signals;
-      feedMeta = { live:true, asof:j.asof || "unknown", note:j.note || "" };
-      // Live sector/size benchmark: only swap in if the feed actually carries
-      // non-empty maps — an old feed version or a failed mcap fetch omits
-      // these keys, and we keep the static fallback rather than blank charts.
-      if (j.bench_sect && Object.keys(j.bench_sect).length){
-        BENCH_SECT = j.bench_sect; benchLive = true;
-      } else { BENCH_SECT = BENCH_SECT_FALLBACK; benchLive = false; }
-      if (j.bench_size && Object.keys(j.bench_size).length){
-        BENCH_SIZE = j.bench_size;
-      } else { BENCH_SIZE = BENCH_SIZE_FALLBACK; }
-      renderAll();
+      applyFeed(await r.json(), "");
       return;
     }catch(e){ /* try next / fall back */ }
   }
   feedMeta = { live:false, asof:"no signal feed loaded yet — run build_signals.py (or feed unreachable)" };
   BENCH_SECT = BENCH_SECT_FALLBACK; BENCH_SIZE = BENCH_SIZE_FALLBACK; benchLive = false;
+  renderAll();
+}
+function applyFeed(j, srcTag){
+  if (!j.signals || !Object.keys(j.signals).length) throw new Error("empty feed");
+  SIGNALS = j.signals;
+  feedMeta = { live:true, asof:(j.asof || "unknown") + srcTag, note:j.note || "" };
+  // Live sector/size benchmark: only swap in if the feed actually carries
+  // non-empty maps — an old feed version or a failed mcap fetch omits
+  // these keys, and we keep the static fallback rather than blank charts.
+  if (j.bench_sect && Object.keys(j.bench_sect).length){
+    BENCH_SECT = j.bench_sect; benchLive = true;
+  } else { BENCH_SECT = BENCH_SECT_FALLBACK; benchLive = false; }
+  if (j.bench_size && Object.keys(j.bench_size).length){
+    BENCH_SIZE = j.bench_size;
+  } else { BENCH_SIZE = BENCH_SIZE_FALLBACK; }
   renderAll();
 }
 /* ================= BOOK (editable store) =================
@@ -711,8 +721,8 @@ const b64enc = s => { let o = "";
 const b64dec = s => new TextDecoder().decode(
   Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0)));
 
-async function ghFetch(method, body){
-  const url = `https://api.github.com/repos/${gh.repo}/contents/book.json` +
+async function ghFetch(method, body, path = "book.json"){
+  const url = `https://api.github.com/repos/${gh.repo}/contents/${path}` +
     (method === "GET" ? `?ref=${encodeURIComponent(gh.branch || "main")}` : "");
   const r = await fetch(url, { method,
     headers: { Authorization:`Bearer ${gh.token}`, Accept:"application/vnd.github+json" },
@@ -720,8 +730,8 @@ async function ghFetch(method, body){
   const j = await r.json().catch(()=>({}));
   if (!r.ok) throw new Error(
     r.status === 409 || r.status === 422
-      ? "book.json moved on ahead of you — someone else saved since this page loaded. Reload, then redo the edit."
-      : r.status === 404 ? "repo, branch or book.json not found (check the token can see this repo)"
+      ? `${path} moved on ahead of you — someone else saved since this page loaded. Reload, then redo the edit.`
+      : r.status === 404 ? `repo, branch or ${path} not found (check the token can see this repo)`
       : r.status === 401 ? "token rejected — expired, or missing Contents: Read and write"
       : (j.message || `GitHub ${r.status}`));
   return j;
@@ -921,13 +931,14 @@ async function ghConnect(){
     localStorage.setItem(GH_KEY, JSON.stringify(gh));
     ghErr = "";
     await loadBook();                            // reload via the API to pick up the sha
+    loadSignals();                               // and pull tonight's prices from GitHub too
     renderGh();
   }catch(e){ gh = null; ghNote("Could not read book.json — " + e.message); }
 }
 function ghDisconnect(){
   localStorage.removeItem(GH_KEY);
   gh = null; bookSha = null; ghErr = "";
-  renderGh(); loadBook();
+  renderGh(); loadBook(); loadSignals();
 }
 /* ================= IMPORT ================= */
 const num = v => { if (v==null||v==="") return null;

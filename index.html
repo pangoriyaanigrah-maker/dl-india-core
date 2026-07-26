@@ -199,7 +199,7 @@ button.ghost{background:none;color:var(--saffron)}
 <body>
 <div class="head-row">
   <div>
-    <div class="eyebrow">DeLorean Partners · CIO Dashboard · Mock</div>
+    <div class="eyebrow">DeLorean Partners · CIO Dashboard</div>
     <h1>DL India Core</h1>
   </div>
   <div class="asof" id="asof"></div>
@@ -217,7 +217,7 @@ button.ghost{background:none;color:var(--saffron)}
     <div>Name</div><div>Weight</div><div>CMP → Target</div><div>Upside</div><div>Signals</div><div>Status</div>
   </div>
   <div id="rows"></div>
-  <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs the Nifty 500 universe.</div>
+  <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs a ~190-name liquid NSE universe (a proxy, not the official Nifty 500).</div>
 </div>
 <div class="view" id="v-imp">
   <div class="drops">
@@ -251,9 +251,10 @@ button.ghost{background:none;color:var(--saffron)}
     dealers own executions (trades file); market data — price, market cap, valuation, momentum, quality —
     is fetched by the app, not typed.<br>
     Signal feed is live: a GitHub Actions cron (build_signals.py) hits Yahoo Finance nightly for
-    prices/momentum and fundamentals, computes z-scores vs an ~65-name NSE universe (a proxy, not the
-    official Nifty 500 cross-section), and writes signals.json. Re-uploading a holdings file here
-    replaces weights/targets/theses only — it does not touch the signal feed.<br>
+    prices, momentum and fundamentals, computes z-scores across a ~190-name liquid NSE universe
+    spanning large to small cap (a proxy, not the official Nifty 500 cross-section), and writes
+    signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
+    not touch the signal feed.<br>
     <b>Note:</b> an upload replaces the whole book. Connected, it writes book.json to GitHub as one
     commit you can revert; not connected, it applies to this browser session only.
 </div>
@@ -555,8 +556,9 @@ function renderOverview(){
   </div>
   <div class="sec">Insights <small>rule-based reads for the IC — judgement stays human</small></div>
   ${ins.map(([tag,txt])=>`<div class="insight"><span class="tag">${tag}</span>${txt}</div>`).join("")}
-  <div class="foot">Realized P&L on full-period average cost, matching the Excel. Return is money-weighted;
-  production computes TWR/XIRR from dated cash flows. Signals: simulated feed in mock (yfinance + FactSet in production).</div>`;
+  <div class="foot">Realized P&L on full-period average cost. Return is money-weighted — TWR/XIRR would need
+  dated cash flows, which arrive with the trades file. Prices and z-scores come from build_signals.py
+  (Yahoo Finance, refreshed nightly by GitHub Actions).</div>`;
 }
 /* ================= RENDER: EXPOSURES ================= */
 function frailHTML(name, note, getZ){
@@ -597,11 +599,11 @@ function renderExposures(){
       <td>0.0%</td><td>${(notHeldW*100).toFixed(1)}%</td>
       <td class="neg">${fmt.pct(-notHeldW)}</td><td>—</td></tr>`;
   el.innerHTML = `
-  <div class="sec">Factor profile <small>saffron diamond = weighted book · blue dots = holdings · axis = z vs Nifty 500</small></div>
+  <div class="sec">Factor profile <small>saffron diamond = weighted book · blue dots = holdings · axis = z vs NSE universe proxy</small></div>
   <div class="panel" style="margin-bottom:18px">
-    ${frailHTML("Value", "Composite of fwd P/E, P/B, EV/EBITDA. Positive = cheaper than index.", s=>s.val)}
-    ${frailHTML("Momentum", "12M−1M and 6M price return blend. Positive = stronger tape.", s=>s.momo)}
-    ${frailHTML("Quality", "ROE, leverage, margin stability, accruals. Positive = higher quality.", s=>s.qual)}
+    ${frailHTML("Value", "Composite of P/E (forward where available, else trailing), P/B, EV/EBITDA. Positive = cheaper than the universe.", s=>s.val)}
+    ${frailHTML("Momentum", "12M−1M plus 6M price return. Needs a year of history, so recent listings score blank rather than on a stub.", s=>s.momo)}
+    ${frailHTML("Quality", "ROE, leverage and net margin, equally weighted. No accruals or margin-stability term — those need multi-period statements the feed doesn't pull.", s=>s.qual)}
   </div>
   <div class="sec">Size <small>${benchLive?"vs live mcap-weighted NSE universe benchmark":"vs static placeholder weights"}</small></div>
   <div class="panel" style="margin-bottom:18px">
@@ -614,11 +616,11 @@ function renderExposures(){
   </div>
   <div class="sec">Sector exposure <small>active weight and P&L contribution · benchmark ${benchLive?"<b style='color:var(--up)'>LIVE (mcap-weighted proxy)</b>":"static placeholder"}</small></div>
   <div class="twrap"><table class="ptable">
-    <thead><tr><th>Sector</th><th>Portfolio</th><th>Nifty 500</th><th>Active</th><th>P&L</th></tr></thead>
+    <thead><tr><th>Sector</th><th>Portfolio</th><th>Benchmark</th><th>Active</th><th>P&L</th></tr></thead>
     <tbody>${secRows}</tbody>
   </table></div>
   <div class="foot">${benchLive
-    ? "Benchmark sector/size is a market-cap-weighted live proxy computed nightly across the script's NSE universe — not the official Nifty 500 index weighting. Widen the universe in build_signals.py for a closer approximation."
+    ? "Benchmark sector/size is a market-cap-weighted live proxy computed nightly across the script's ~190-name NSE universe — not the official Nifty 500 index weighting, and still large-cap tilted. Widen UNIVERSE in build_signals.py for a closer approximation."
     : "Benchmark sector and size weights are a static placeholder — the live feed either doesn't include bench_sect/bench_size yet, or is unreachable."}</div>`;
 }
 /* ================= RENDER: POSITIONS ================= */

@@ -1,74 +1,105 @@
-"""Generate a test holdings workbook: same 15 stocks, randomised numbers.
+"""Build Holdings_File_TEST.xlsx: the real book with its gaps filled in.
 
-Identity columns (Ticker/Company/Sector/Industry/Analyst/Thesis/Strategy) are
-copied from book.json so the file is a drop-in for the Import tab. Only the
-numbers move.
+Holdings_File.xlsx is complete enough to render but leaves parts of the
+dashboard dark. This writes a copy with every blank populated, plus the Trades
+sheet the real file doesn't have at all — which is the only reason Total P&L,
+Realized, Unrealized and all four attribution panels currently read zero.
 
-Targets are drawn around each name's real CMP from signals.json, and the weight
-pattern is spread on purpose so the upload exercises the branches the live book
-never reaches: trims, exits, target-hit, near-target and Low conviction.
+Real analyst content is copied verbatim. Invented text is tagged [placeholder]
+so nobody mistakes it for someone's actual view.
 
     python make_test_xlsx.py
 """
 import json
-import random
+from datetime import date, timedelta
 
 import openpyxl
 
-COLS = ["Ticker", "Company", "Sector", "Industry", "Analyst", "Weight",
-        "FullWeight", "Target", "AddLevel", "Conviction", "Thesis", "Strategy"]
+SRC, OUT = "Holdings_File.xlsx", "Holdings_File_TEST.xlsx"
+NAV = 10_000_000          # ₹1 crore book, so a 2.5% position is ₹2.5L
+ADD_PULLBACK = 0.92       # stage adds 8% below spot
+COST_RATE = 0.001         # 10 bps all-in
 
-# (fullWeight rule, target multiple of CMP) — index i applies to holding i, so
-# the mix is deterministic and every dashboard state is represented.
-SHAPES = [
-    ("add",  1.35), ("add",  1.22), ("full", 1.18), ("trim", 1.09),
-    ("exit", 0.96), ("add",  1.41), ("full", 1.02), ("exit", 0.88),
-    ("add",  1.27), ("trim", 1.15), ("full", 0.94), ("add",  1.31),
-    ("full", 1.06), ("exit", 1.12), ("add",  1.19),
-]
-CONV = ["High", "Medium (Watchlist)", "Low"]
+# Gaps in the real sheet. Target/AddLevel are derived from live prices below.
+FILL = {
+    "AIMTRON": {"Conviction": "High",
+                "Strategy": "[placeholder] Technical setup: EMS order-book visibility. "
+                            "Action: accumulate on pullbacks to the 50-day EMA."},
+    "J&KBANK": {"Conviction": "Medium (Watchlist)",
+                "Thesis": "[placeholder] Theme: J&K credit normalisation. Growth: loan book "
+                          "recovery with improving asset quality. Valuation: trades below book, "
+                          "re-rates as slippage falls.",
+                "Strategy": "[placeholder] Technical setup: basing above long-term support. "
+                            "Action: wait for a breakout on volume before sizing up."},
+}
+# Names to take partial profits on, so Realized P&L isn't zero either.
+SELLS = {"MUTHOOTMF": 0.4, "IOLCP": 0.5, "SKIPPER": 0.35}
 
 
-def build(out, seed):
-    rnd = random.Random(seed)
-    book = json.load(open("book.json", encoding="utf-8"))["holdings"]
+def entry_price(cmp_, lo):
+    """A plausible historic fill: 35% of the way up from the 52-week low."""
+    return round(lo + 0.35 * (cmp_ - lo), 2)
+
+
+def build():
+    wb = openpyxl.load_workbook(SRC)
+    ws = wb["Portfolio"]
     sigs = json.load(open("signals.json", encoding="utf-8"))["signals"]
+    hdr = [c.value for c in ws[1]]
+    col = {name: i + 1 for i, name in enumerate(hdr)}
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Portfolio"
-    ws.append(COLS)
+    filled, holdings = [], []
+    for r in range(2, ws.max_row + 1):
+        tk = ws.cell(r, col["Ticker"]).value
+        if not tk:
+            continue
+        s = sigs.get(tk) or {}
+        cmp_, lo = s.get("cmp"), s.get("lo")
 
-    total_w = 0.0
-    for i, h in enumerate(book):
-        shape, tmult = SHAPES[i % len(SHAPES)]
-        wt = round(rnd.uniform(1.5, 5.5), 1)                  # percent
-        full = {"add":  round(wt + rnd.uniform(1.0, 3.0), 1),
-                "trim": round(wt * rnd.uniform(0.4, 0.7), 1),
-                "exit": 0,
-                "full": wt}[shape]
-        cmp_ = (sigs.get(h["tk"]) or {}).get("cmp")
-        # No price feed for this name? Fall back to its existing target, then to
-        # a plain number — the sheet must never carry a blank where the test
-        # needs one, or the branch it's probing silently doesn't run.
-        base = cmp_ or h.get("tp") or 100
-        target = round(base * tmult * rnd.uniform(0.97, 1.03), 2)
-        # Price-gated adds get a trigger below spot; everything else is event-gated.
-        add_lvl = round(base * rnd.uniform(0.86, 0.95), 2) if shape == "add" and i % 2 == 0 else None
+        for field, value in FILL.get(tk, {}).items():
+            if not ws.cell(r, col[field]).value:
+                ws.cell(r, col[field]).value = value
+                filled.append(f"{tk}.{field}")
 
-        total_w += wt
-        ws.append([h["tk"], h["co"], h["sector"], h.get("industry"), h["analyst"],
-                   wt, full, target, add_lvl, rnd.choice(CONV),
-                   h.get("thesis"), h.get("strategy")])
+        # Target: only PARKHOSPS lacks one. 25% above spot keeps it ON THESIS.
+        if not ws.cell(r, col["Target"]).value and cmp_:
+            ws.cell(r, col["Target"]).value = round(cmp_ * 1.25, 2)
+            filled.append(f"{tk}.Target")
+        # AddLevel is blank for every row, which reads as "event-gated" on the
+        # dashboard. Filling it turns the staged-add triggers into real prices.
+        if not ws.cell(r, col["AddLevel"]).value and cmp_:
+            ws.cell(r, col["AddLevel"]).value = round(cmp_ * ADD_PULLBACK, 2)
+            filled.append(f"{tk}.AddLevel")
 
-    for col, width in zip("ABCDEFGHIJKL", (12, 22, 20, 34, 10, 9, 11, 10, 10, 20, 60, 60)):
-        ws.column_dimensions[col].width = width
-    wb.save(out)
-    return total_w, len(book)
+        wt = ws.cell(r, col["Weight"]).value
+        if cmp_ and lo:
+            holdings.append((tk, float(wt), cmp_, lo))
 
+    # ---- Trades sheet: the real workbook has none, so P&L has nothing to compute
+    tr = wb.create_sheet("Trades")
+    tr.append(["Date", "Ticker", "Side", "Qty", "Price", "Costs"])
+    today = date.today()
+    for i, (tk, wt, cmp_, lo) in enumerate(holdings):
+        px = entry_price(cmp_, lo)
+        qty = max(1, round(NAV * wt / 100 / px))
+        tr.append([today - timedelta(days=240 - i * 12), tk, "Buy", qty, px,
+                   round(qty * px * COST_RATE, 2)])
+    for i, (tk, frac) in enumerate(SELLS.items()):
+        row = next(h for h in holdings if h[0] == tk)
+        px = entry_price(row[2], row[3])
+        qty = max(1, int(round(NAV * row[1] / 100 / px) * frac))
+        sell_px = round(row[2] * 0.98, 2)
+        tr.append([today - timedelta(days=45 - i * 15), tk, "Sell", qty, sell_px,
+                   round(qty * sell_px * COST_RATE, 2)])
+    for c, w in zip("ABCDEF", (12, 12, 8, 10, 12, 10)):
+        tr.column_dimensions[c].width = w
 
-OUT, SEED = "Holdings_File_TEST.xlsx", 7      # bump SEED to re-roll the numbers
+    wb.save(OUT)
+    return filled, len(holdings), tr.max_row - 1
+
 
 if __name__ == "__main__":
-    tot, n = build(OUT, SEED)
-    print(f"{OUT}: {n} holdings, weights total {tot:.1f}% -> cash {100 - tot:.1f}%")
+    filled, n, trades = build()
+    print(f"{OUT}: {n} holdings, {trades} trades, {len(filled)} blanks filled")
+    for f in filled:
+        print("  +", f)

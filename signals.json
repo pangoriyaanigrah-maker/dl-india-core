@@ -1,11 +1,11 @@
 {
- "asof": "26 Jul 2026, 20:18 IST",
+ "asof": "27 Jul 2026, 00:48 IST",
  "note": "z-scores are cross-sectional vs an NSE proxy universe, not the official Nifty 500. value = cheapness on P/E, P/B, EV/EBITDA; quality = ROE, leverage, net margin (no accruals or margin-stability term); momentum = (12M-1M) + 6M price return, needs 1y of history.",
  "errors": [],
  "signals": {
   "MUTHOOTMF": {
    "cmp": 250.11,
-   "mcap": 4196,
+   "mcap": 4198,
    "lo": 145.46,
    "val": 1.2,
    "momo": 0.92,
@@ -13,7 +13,7 @@
   },
   "NORTHARC": {
    "cmp": 299.4,
-   "mcap": 4840,
+   "mcap": 4844,
    "lo": 206.85,
    "val": 1.25,
    "momo": 0.1,
@@ -29,7 +29,7 @@
   },
   "MANINDS": {
    "cmp": 527.35,
-   "mcap": 3956,
+   "mcap": 3950,
    "lo": 310.55,
    "val": 1.19,
    "momo": 1.48,
@@ -45,7 +45,7 @@
   },
   "DEEPINDS": {
    "cmp": 479.6,
-   "mcap": 3069,
+   "mcap": 3078,
    "lo": 331.55,
    "val": 1.18,
    "momo": 0.48,
@@ -53,19 +53,19 @@
   },
   "IOLCP": {
    "cmp": 149.22,
-   "mcap": 4380,
+   "mcap": 4390,
    "lo": 68.15,
    "val": 0.76,
    "momo": 2.65,
-   "qual": -0.46
+   "qual": -0.47
   },
   "ROBU": {
    "cmp": 1171.65,
-   "mcap": 1214,
+   "mcap": 1207,
    "lo": 636.36,
-   "val": -0.9,
+   "val": -0.89,
    "momo": 1.7,
-   "qual": 0.38
+   "qual": 0.37
   },
   "VOEPL": {
    "cmp": 484.05,
@@ -77,11 +77,11 @@
   },
   "VENUSPIPES": {
    "cmp": 1700.1,
-   "mcap": 3522,
+   "mcap": 3530,
    "lo": 894.0,
    "val": 0.49,
    "momo": 1.28,
-   "qual": -0.17
+   "qual": -0.18
   },
   "AIMTRON": {
    "cmp": 1283.95,
@@ -93,15 +93,15 @@
   },
   "GEMAROMA": {
    "cmp": 178.1,
-   "mcap": 930,
+   "mcap": 938,
    "lo": 134.63,
    "val": -0.31,
    "momo": -0.75,
-   "qual": -0.82
+   "qual": -0.83
   },
   "SKIPPER": {
    "cmp": 528.65,
-   "mcap": 5969,
+   "mcap": 5973,
    "lo": 330.4,
    "val": 0.76,
    "momo": 1.05,
@@ -109,7 +109,7 @@
   },
   "J&KBANK": {
    "cmp": 172.57,
-   "mcap": 19003,
+   "mcap": 19017,
    "lo": 98.09,
    "val": 1.26,
    "momo": 1.77,
@@ -117,28 +117,28 @@
   },
   "PARKHOSPS": {
    "cmp": 280.25,
-   "mcap": 12105,
+   "mcap": 12219,
    "lo": 143.92,
-   "val": 0.2,
+   "val": 0.19,
    "momo": null,
    "qual": 0.13
   }
  },
  "bench_sect": {
-  "Financial Services": 0.2721,
-  "Industrials": 0.1289,
-  "Energy": 0.1123,
-  "Consumer Cyclical": 0.0991,
-  "Technology": 0.0916,
-  "Consumer Defensive": 0.0818,
-  "Basic Materials": 0.0755,
-  "Healthcare": 0.0693,
-  "Communication Services": 0.0434,
-  "Utilities": 0.0261
+  "Financial Services": 0.2792,
+  "Industrials": 0.1277,
+  "Energy": 0.1112,
+  "Consumer Cyclical": 0.0982,
+  "Technology": 0.0905,
+  "Consumer Defensive": 0.0811,
+  "Basic Materials": 0.0748,
+  "Healthcare": 0.0687,
+  "Communication Services": 0.043,
+  "Utilities": 0.0258
  },
  "bench_size": {
-  "Large": 0.9118,
-  "Mid": 0.0671,
-  "Small": 0.0211
+  "Large": 0.9127,
+  "Mid": 0.0664,
+  "Small": 0.0209
  }
 }

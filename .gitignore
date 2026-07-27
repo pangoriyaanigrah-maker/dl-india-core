@@ -12,3 +12,6 @@ Trades_File_TEST.xlsx
 
 # Editor config; start_dashboard.bat is the supported way to run this.
 .claude/
+
+# Excel lock files
+~$*

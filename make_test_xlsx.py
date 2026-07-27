@@ -77,8 +77,14 @@ def build():
         if cmp_ and lo:
             holdings.append((tk, float(wt), cmp_, lo))
 
-    # ---- Trades sheet: the real workbook has none, so P&L has nothing to compute
-    tr = wb.create_sheet("Trades")
+    # Holdings fixture carries the Portfolio sheet ONLY. Trades live in their
+    # own workbook — mixing them into the holdings file made an upload look
+    # like the dashboard invented executions the user never provided.
+    wb.save(OUT)
+
+    tb = openpyxl.Workbook()
+    tr = tb.active
+    tr.title = "Trades"                    # the Trades drop zone requires this name
     tr.append(["Date", "Ticker", "Side", "Qty", "Price", "Costs"])
     today = date.today()
     for i, (tk, wt, cmp_, lo) in enumerate(holdings):
@@ -95,17 +101,6 @@ def build():
                    round(qty * sell_px * COST_RATE, 2)])
     for c, w in zip("ABCDEF", (12, 12, 8, 10, 12, 10)):
         tr.column_dimensions[c].width = w
-    wb.save(OUT)
-
-    # Standalone copy. The Trades drop zone requires a sheet literally named
-    # "Trades", so the sheet title matters more than the file name here.
-    tb = openpyxl.Workbook()
-    tb.remove(tb.active)
-    tb.create_sheet("Trades")
-    for row in tr.iter_rows(values_only=True):
-        tb["Trades"].append(list(row))
-    for c, w in zip("ABCDEF", (12, 12, 8, 10, 12, 10)):
-        tb["Trades"].column_dimensions[c].width = w
     tb.save(OUT_TRADES)
 
     return filled, len(holdings), tr.max_row - 1

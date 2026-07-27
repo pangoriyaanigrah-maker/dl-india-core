@@ -634,6 +634,31 @@ function renderExposures(){
   const sizeW = {Large:0,Mid:0,Small:0};
   state.holdings.forEach(h=>{const b=bucketOf(h.tk); if(sizeW[b]!=null) sizeW[b]+=h.wt;});
   const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D"};
+  /* Book tilt per factor, plus the name at each end. Unlike the mock, our feed
+     returns null for a name with no fundamentals or under a year of history —
+     those are excluded from the ranking rather than sorted as if they were 0,
+     which would put them in the middle and hide the real extremes. */
+  const FACTORS = [
+    ["Value",    s=>s.val,  "P/E, P/B, EV/EBITDA · +ve = cheaper than the universe"],
+    ["Momentum", s=>s.momo, "12M−1M plus 6M return · +ve = stronger tape"],
+    ["Quality",  s=>s.qual, "ROE, leverage, net margin · +ve = higher quality"],
+  ];
+  const factorRows = FACTORS.map(([name, getZ, note])=>{
+    const wz = wavg(h=>{const s=sig(h.tk); return s?getZ(s):null;});
+    const scored = state.holdings
+      .map(h=>({tk:h.tk, z:sig(h.tk) ? getZ(sig(h.tk)) : null}))
+      .filter(r=>r.z!=null).sort((a,b)=>b.z-a.z);
+    const cell = r => r ? `${esc(r.tk)} <span class="${r.z>=0?"pos":"neg"}">${fmt.z(r.z)}</span>`
+                        : `<span style="color:var(--faint)">—</span>`;
+    const zc = v => v>=0.3 ? "pos" : v<=-0.3 ? "neg" : "";
+    return `<tr><td>${name}<div style="font-size:10px;color:var(--faint);white-space:normal">${note}</div></td>
+      <td class="${zc(wz)}" style="font-weight:600">${scored.length?fmt.z(wz):"—"}</td>
+      <td style="text-align:left">${!scored.length?"no data"
+         : wz>=0.3?"Above index" : wz<=-0.3?"Below index" : "Near index"}</td>
+      <td>${cell(scored[0])}</td>
+      <td>${cell(scored[scored.length-1])}</td>
+      <td>${scored.length}/${state.holdings.length}</td></tr>`;
+  }).join("");
   const secRows = held.sort((a,b)=>wSec[b]-wSec[a]).map(s=>{
     const pw = wSec[s]/W(), bw = BENCH_SECT[s]||0, act = pw-bw;
     const bwid = Math.min(Math.abs(act)*300, 60);
@@ -651,6 +676,11 @@ function renderExposures(){
     ${frailHTML("Momentum", "12M−1M plus 6M price return. Needs a year of history, so recent listings score blank rather than on a stub.", s=>s.momo)}
     ${frailHTML("Quality", "ROE, leverage and net margin, equally weighted. No accruals or margin-stability term — those need multi-period statements the feed doesn't pull.", s=>s.qual)}
   </div>
+  <div class="sec">Factor summary <small>book tilt, and the name at each end of every factor</small></div>
+  <div class="twrap" style="margin-bottom:18px"><table class="ptable">
+    <thead><tr><th>Factor</th><th>Book</th><th style="text-align:left">Tilt</th><th>Highest</th><th>Lowest</th><th>Scored</th></tr></thead>
+    <tbody>${factorRows}</tbody>
+  </table></div>
   <div class="sec">Size <small>${benchLive?"vs live mcap-weighted NSE universe benchmark":"vs static placeholder weights"}</small></div>
   <div class="panel" style="margin-bottom:18px">
     <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;margin-bottom:8px">
@@ -1102,7 +1132,9 @@ function handleFile(file, slot){
         if (slot==="h"){
           if (!wbk.Sheets["Portfolio"]) throw "No 'Portfolio' sheet in this workbook.";
           holdings = holdingsFromCSV(rowsFromSheet(wbk.Sheets["Portfolio"]));
-          if (wbk.Sheets["Trades"]) trades = tradesFromCSV(rowsFromSheet(wbk.Sheets["Trades"]));
+          // Holdings zone imports holdings ONLY. An embedded Trades sheet is
+          // ignored on purpose — trades enter through the Trades zone, so a
+          // holdings upload can never smuggle executions in unnoticed.
         } else {
           if (!wbk.Sheets["Trades"]) throw "No 'Trades' sheet in this workbook.";
           trades = tradesFromCSV(rowsFromSheet(wbk.Sheets["Trades"]));
@@ -1120,6 +1152,8 @@ function handleFile(file, slot){
       msg.className = "msg ok";
       msg.textContent = (holdings?`Parsed ${holdings.length} holdings`:"") +
         (holdings&&trades?" and ":"") + (trades?`${trades.length} trades`:"") + ` from ${file.name}.` +
+        (slot==="h" && wbk.Sheets["Trades"]
+          ? " Its Trades sheet was IGNORED — drop the file on the Trades zone to load executions." : "") +
         (missing.length ? ` No signal feed for: ${missing.join(", ")} — shown without prices until the feed covers them.` : "") +
         " Review, then load.";
       if (holdings){

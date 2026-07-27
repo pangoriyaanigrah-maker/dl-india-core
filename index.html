@@ -119,10 +119,15 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
   background:var(--ink);border:2px solid var(--up);transform:translateX(-50%)}
 /* nowrap: "TP 2,188" wrapping to a second line is what dropped the label onto
    the track. The rail is only 26px tall, so a two-line label always collides. */
-.rail{padding-top:4px}
+.rail{padding-top:4px;padding-bottom:13px}
 .rail .lo,.rail .tg{position:absolute;top:-7px;font-family:'IBM Plex Mono';font-size:9.5px;
   color:var(--faint);white-space:nowrap;line-height:1}
 .rail .tg{color:var(--saffron)}
+/* Add-level price sits below the track, opposite lo/tg above it, so the two
+   rows of labels can never collide vertically regardless of where each price
+   falls on the axis. */
+.rail .addlbl{position:absolute;bottom:-7px;font-family:'IBM Plex Mono';font-size:9.5px;
+  color:var(--blue);white-space:nowrap;line-height:1}
 .detail{display:none;font-size:14px;color:var(--dim);line-height:1.55;
   border-top:1px dashed var(--line);margin:0 16px;padding:11px 0 14px}
 .detail b{color:var(--text);font-weight:600}
@@ -687,11 +692,20 @@ function renderPositions(){
       // target is near the left end (a target-hit name), where right-aligning
       // runs it straight back over the low label. Then drop the low label.
       const tpPct = parseFloat(x(h.tp));
+      // Add-level label sits below the track (TP/lo sit above), so the two
+      // never collide vertically. It still needs the same left/right flip TP
+      // uses, or a trigger near the rail's edge runs its price off the card.
+      let addLbl = "";
+      if (h.addLvl){
+        const addPct = parseFloat(x(h.addLvl));
+        addLbl = `<span class="addlbl" style="left:${x(h.addLvl)};transform:translateX(${addPct > 65 ? "-100%" : "0"})">Add ${Math.round(h.addLvl).toLocaleString("en-IN")}</span>`;
+      }
       railHtml = `<div class="rail">
         ${tpPct > 34 ? `<span class="lo" style="left:0">${Math.round(loAnchor).toLocaleString("en-IN")}</span>` : ""}
         <span class="tg" style="left:${x(h.tp)};transform:translateX(${tpPct > 34 ? "-100%" : "0"})">TP ${Math.round(h.tp).toLocaleString("en-IN")}</span>
         <div class="track"></div>
         ${h.addLvl?`<div class="add" style="left:${x(h.addLvl)}" title="Add ₹${h.addLvl}"></div>`:""}
+        ${addLbl}
         <div class="tp" style="left:${x(h.tp)}"></div>
         <div class="cmp" style="left:${x(cmp)};border-color:${col}"></div></div>`;
     } else if (cmp && h.tp==null){

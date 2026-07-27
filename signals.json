@@ -1,5 +1,5 @@
 {
- "asof": "27 Jul 2026, 18:03 IST",
+ "asof": "27 Jul 2026, 20:55 IST",
  "note": "z-scores are cross-sectional vs the official Nifty 500 constituents (NSE list, fetched nightly); the sector/size benchmark is market-cap weighted over the same names — full mcap, not free-float. value = cheapness on P/E, P/B, EV/EBITDA; quality = ROE, leverage, net margin (no accruals or margin-stability term); momentum = (12M-1M) + 6M price return, needs 1y of history.",
  "errors": [],
  "signals": {
@@ -29,7 +29,7 @@
    "worstM": -0.2639,
    "mdd": -0.486,
    "dvol": 0.0266,
-   "beta": 1.25
+   "beta": 1.26
   },
   "EBGNG": {
    "cmp": 587.3,
@@ -85,7 +85,7 @@
    "worstM": -0.2585,
    "mdd": -0.4567,
    "dvol": 0.0318,
-   "beta": 1.05
+   "beta": 1.04
   },
   "IOLCP": {
    "cmp": 151.46,
@@ -155,7 +155,7 @@
    "worstM": -0.3358,
    "mdd": -0.4519,
    "dvol": 0.0359,
-   "beta": 1.25
+   "beta": 1.24
   },
   "GEMAROMA": {
    "cmp": 189.37,
@@ -169,7 +169,7 @@
    "worstM": -0.353,
    "mdd": -0.578,
    "dvol": 0.0328,
-   "beta": 1.21
+   "beta": 1.18
   },
   "SKIPPER": {
    "cmp": 520.65,
@@ -215,22 +215,22 @@
   }
  },
  "bench_sect": {
-  "Financial Services": 0.2601,
-  "Industrials": 0.1194,
-  "Consumer Cyclical": 0.1165,
-  "Basic Materials": 0.0968,
-  "Energy": 0.0809,
-  "Technology": 0.0766,
-  "Healthcare": 0.0736,
-  "Consumer Defensive": 0.0628,
-  "Utilities": 0.0563,
-  "Communication Services": 0.0416,
-  "Real Estate": 0.015,
+  "Financial Services": 0.2554,
+  "Industrials": 0.1201,
+  "Consumer Cyclical": 0.1173,
+  "Basic Materials": 0.0975,
+  "Energy": 0.0814,
+  "Technology": 0.0771,
+  "Healthcare": 0.0741,
+  "Consumer Defensive": 0.0632,
+  "Utilities": 0.0567,
+  "Communication Services": 0.0419,
+  "Real Estate": 0.0151,
   "Unclassified": 0.0003
  },
  "bench_size": {
-  "Large": 0.7966,
-  "Mid": 0.1453,
-  "Small": 0.0581
+  "Large": 0.7953,
+  "Mid": 0.1463,
+  "Small": 0.0584
  }
 }

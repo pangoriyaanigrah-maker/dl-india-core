@@ -16,9 +16,12 @@ Tickers that Yahoo can't resolve land in signals.json's "errors" and simply
 show as NO FEED on the dashboard. Fix one by adding a "yfSymbol" to that
 holding in book.json — e.g. "yfSymbol": "MACFOS.NS".
 """
+import csv
+import io
 import json
 import math
 import sys
+import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -33,36 +36,10 @@ CUTS = {"large": 67000, "mid": 22000}
 # Beta benchmark. Nifty 50 — the index the book is actually discussed against.
 INDEX = "^NSEI"
 
-# Cross-sectional universe: a liquid NSE proxy, not the official Nifty 500.
-# Deliberately spans large through small cap. A megacap-only list is worse than
-# useless here — this book is entirely small/SME names, so they'd all sit above
-# the 95th percentile, winsorize to the same value, and report identical
-# momentum. It also makes bench_size honest; 65 megacaps price the market at
-# 99.8% large. Portfolio names are appended automatically, so every holding is
-# part of the cross-section it is scored against.
-UNIVERSE = """
-RELIANCE HDFCBANK ICICIBANK INFY TCS ITC LT SBIN BHARTIARTL KOTAKBANK AXISBANK
-HINDUNILVR BAJFINANCE MARUTI SUNPHARMA TITAN ULTRACEMCO NESTLEIND WIPRO ONGC
-NTPC POWERGRID TATASTEEL JSWSTEEL ADANIENT ADANIPORTS COALINDIA HCLTECH TECHM
-ASIANPAINT BAJAJFINSV GRASIM CIPLA DRREDDY DIVISLAB EICHERMOT HEROMOTOCO
-BRITANNIA HINDALCO INDUSINDBK M&M SHRIRAMFIN TATACONSUM APOLLOHOSP BEL BPCL IOC
-SBILIFE HDFCLIFE PIDILITIND DABUR GODREJCP HAVELLS SIEMENS ABB CUMMINSIND
-DIXON PERSISTENT MPHASIS TRENT DMART ETERNAL TMPV
-FEDERALBNK AUBANK BANKBARODA CANBK PNB UNIONBANK INDIANB IDFCFIRSTB JIOFIN LICI
-PFC RECLTD IRFC HUDCO CDSL BSE MCX ANGELONE CAMS KFINTECH POLICYBZR PAYTM
-TATAELXSI KPITTECH COFORGE OFSS SONATSOFTW CYIENT TATATECH NYKAA DELHIVERY IRCTC
-HAL BDL MAZDOCK COCHINSHIP GRSE DATAPATTNS ZENTEC KAYNES SYRMA
-SUZLON RVNL IRCON NBCC NHPC SJVN IEX TITAGARH THERMAX AIAENG GRINDWELL
-CARBORUNIV SKFINDIA TIMKEN ELGIEQUIP KSB KIRLOSBROS SHAKTIPUMP
-AMBER VOLTAS BLUESTARCO CROMPTON VGUARD POLYCAB KEI FINCABLES RRKABEL
-ENDURANCE SUNDRMFAST BALKRISIND APOLLOTYRE MRF CEATLTD ESCORTS ASHOKLEY TVSMOTOR
-SUPREMEIND ASTRAL FINPIPE APLAPOLLO RATNAMANI MAHSEAMLES JINDALSAW WELCORP
-DEEPAKNTR AARTIIND NAVINFLUOR SRF ATUL VINATIORGA FINEORG ALKYLAMINE CLEAN
-LAURUSLABS GLENMARK TORNTPHARM ZYDUSLIFE IPCALAB AJANTPHARM ERIS JBCHEPHARM
-FORTIS MAXHEALTH NH KIMS RAINBOW METROPOLIS LALPATHLAB
-JUBLFOOD DEVYANI SAPPHIRE WESTLIFE VBL RADICO UBL PGHH MARICO EMAMILTD BAJAJCON
-KANSAINER BERGEPAINT INDIGO GESHIP SCI
-""".split()
+# Cross-sectional universe: the real Nifty 500, pulled from NSE's own
+# constituent list. Every z-score, and the sector/size benchmark, is computed
+# across these names.
+NIFTY500_CSV = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 
 
 # ---------------------------------------------------------------- maths
@@ -191,6 +168,25 @@ def load_book():
     return holdings
 
 
+def nifty500():
+    """Official Nifty 500 constituents, straight from NSE.
+
+    No embedded fallback list on purpose: if NSE is unreachable the run aborts
+    and signals.json keeps yesterday's numbers, which is honest. A stale hard-
+    coded proxy would silently score the book against the wrong cross-section
+    and nothing on the dashboard would say so.
+    """
+    req = urllib.request.Request(NIFTY500_CSV, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8-sig")
+    except Exception as e:
+        sys.exit(f"could not fetch the Nifty 500 list ({e}) — signals.json left untouched")
+    syms = [r["Symbol"].strip() for r in csv.DictReader(io.StringIO(raw)) if r.get("Symbol")]
+    if len(syms) < 400:
+        sys.exit(f"Nifty 500 list looks wrong: {len(syms)} symbols, expected ~500")
+    return syms
+
+
 def fetch(symbols):
     """-> ({symbol: [close, ...]}, {symbol: info}, close_dataframe).
     One bulk price call; the fundamentals endpoint is per-name and flaky, so
@@ -237,11 +233,11 @@ def build():
                        else [f'{h["tk"]}.NS', f'{h["tk"]}.BO']
               for h in holdings}
 
-    universe = [f"{t}.NS" for t in UNIVERSE]
+    universe = [f"{t}.NS" for t in nifty500()]
     symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs}
                      | {INDEX})               # INDEX is the beta benchmark
     print(f"fetching {len(symbols)} symbols ({len(wanted)} holdings + "
-          f"{len(universe)} universe + index)...")
+          f"{len(universe)} Nifty 500 + index)...")
     px, info, close_df = fetch(symbols)
 
     # Resolve each holding to the first candidate that actually returned data.
@@ -307,8 +303,10 @@ def build():
 
     return {
         "asof": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"),
-        "note": "z-scores are cross-sectional vs an NSE proxy universe, not the "
-                "official Nifty 500. value = cheapness on P/E, P/B, EV/EBITDA; "
+        "note": "z-scores are cross-sectional vs the official Nifty 500 constituents "
+                "(NSE list, fetched nightly); the sector/size benchmark is market-cap "
+                "weighted over the same names — full mcap, not free-float. "
+                "value = cheapness on P/E, P/B, EV/EBITDA; "
                 "quality = ROE, leverage, net margin (no accruals or margin-stability "
                 "term); momentum = (12M-1M) + 6M price return, needs 1y of history.",
         "errors": errors,

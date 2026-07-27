@@ -210,7 +210,7 @@ button.ghost{background:none;color:var(--saffron)}
     <div>Name</div><div>Weight</div><div>CMP → Target</div><div>Upside</div><div>Signals</div><div>Status</div>
   </div>
   <div id="rows"></div>
-  <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs a ~190-name liquid NSE universe (a proxy, not the official Nifty 500).</div>
+  <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs the official Nifty 500 constituents, fetched from NSE nightly.</div>
 </div>
 <div class="view" id="v-imp">
   <div class="drops">
@@ -244,8 +244,8 @@ button.ghost{background:none;color:var(--saffron)}
     dealers own executions (trades file); market data — price, market cap, valuation, momentum, quality —
     is fetched by the app, not typed.<br>
     Signal feed is live: a GitHub Actions cron (build_signals.py) hits Yahoo Finance nightly for
-    prices, momentum and fundamentals, computes z-scores across a ~190-name liquid NSE universe
-    spanning large to small cap (a proxy, not the official Nifty 500 cross-section), and writes
+    prices, momentum and fundamentals, computes z-scores across the official Nifty 500
+    constituents (NSE's own list, re-fetched each run), and writes
     signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
     not touch the signal feed.<br>
     <b>Saving is automatic.</b> An upload replaces the whole book and is remembered, so it loads
@@ -643,12 +643,12 @@ function renderExposures(){
       <td>0.0%</td><td>${(notHeldW*100).toFixed(1)}%</td>
       <td class="neg">${fmt.pct(-notHeldW)}</td><td>—</td></tr>`;
   el.innerHTML = `
-  <div class="sec">Factor profile <small>weighted z-scores vs the NSE universe cross-section</small></div>
+  <div class="sec">Factor profile <small>weighted z-scores vs the Nifty 500 cross-section</small></div>
   <div class="twrap" style="margin-bottom:18px"><table class="ptable">
     <thead><tr><th>Factor</th><th>Book</th><th style="text-align:left">Tilt</th><th>Highest</th><th>Lowest</th></tr></thead>
     <tbody>${factorRows}</tbody>
   </table></div>
-  <div class="sec">Size <small>${benchLive?"vs live mcap-weighted NSE universe benchmark":"vs static placeholder weights"}</small></div>
+  <div class="sec">Size <small>${benchLive?"vs mcap-weighted Nifty 500":"vs static placeholder weights"}</small></div>
   <div class="panel" style="margin-bottom:18px">
     <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;margin-bottom:8px">
       ${Object.entries(sizeW).map(([k,v])=>`<div style="width:${v/W()*100}%;background:${sc[k]}"></div>`).join("")}
@@ -657,13 +657,13 @@ function renderExposures(){
       ${Object.entries(sizeW).map(([k,v])=>`<span><span class="dot" style="background:${sc[k]}"></span>${k} ${(v/W()*100).toFixed(0)}% (idx ${(BENCH_SIZE[k]*100).toFixed(0)})</span>`).join("")}
     </div>
   </div>
-  <div class="sec">Sector exposure <small>active weight and P&L contribution · benchmark ${benchLive?"<b style='color:var(--up)'>LIVE (mcap-weighted proxy)</b>":"static placeholder"}</small></div>
+  <div class="sec">Sector exposure <small>active weight and P&L contribution · benchmark ${benchLive?"<b style='color:var(--up)'>LIVE Nifty 500</b>":"static placeholder"}</small></div>
   <div class="twrap"><table class="ptable">
     <thead><tr><th>Sector</th><th>Portfolio</th><th>Benchmark</th><th>Active</th><th>P&L</th></tr></thead>
     <tbody>${secRows}</tbody>
   </table></div>
   <div class="foot">${benchLive
-    ? "Benchmark sector/size is a market-cap-weighted live proxy computed nightly across the script's ~190-name NSE universe — not the official Nifty 500 index weighting, and still large-cap tilted. Widen UNIVERSE in build_signals.py for a closer approximation."
+    ? "Benchmark sector and size are market-cap weighted across the official Nifty 500 constituents, re-fetched from NSE on every run. One deviation from the published index: weights use full market cap, not free float, so the largest promoter-held names carry slightly more here than in the real index."
     : "Benchmark sector and size weights are a static placeholder — the live feed either doesn't include bench_sect/bench_size yet, or is unreachable."}</div>`;
 }
 /* ================= RENDER: POSITIONS ================= */

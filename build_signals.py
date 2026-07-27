@@ -3,7 +3,7 @@
 Writes signals.json: last price, market cap (Rs crore), 52-week low, and
 cross-sectional value / momentum / quality z-scores for every ticker in
 book.json — plus a market-cap-weighted sector and size benchmark computed
-across an NSE universe proxy.
+across the Nifty Smallcap 250 + Microcap 250 (see BENCH_INDICES).
 
 Division of labour: book.json is human-owned (weights, targets, theses) and is
 only ever READ here. signals.json is machine-owned and only ever WRITTEN here.
@@ -36,13 +36,16 @@ CUTS = {"large": 67000, "mid": 22000}
 # Beta benchmark. Nifty 50 — the index the book is actually discussed against.
 INDEX = "^NSEI"
 
-# Cross-sectional universe: Nifty Smallcap 250, from NSE's own constituent
-# list. The book is small/SME names, so this is the peer group that makes a
+# Cross-sectional universe: Smallcap 250 + Microcap 250, unioned. The book is
+# small and micro-cap names, so this pair is the peer group that makes a
 # z-score mean something — against the Nifty 500 they all read as extreme on
-# size alone. Swap the filename to change index; ind_niftytotalmarket_list.csv
-# (751 names) is the broadest, at the cost of reintroducing the large-cap skew.
-INDEX_CSV = "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv"
-INDEX_NAME = "Nifty Smallcap 250"
+# size alone. The two lists don't overlap (checked at runtime), so the union
+# is exactly 500 names, half small-cap and half micro-cap.
+BENCH_INDICES = [
+    ("https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv", "Nifty Smallcap 250"),
+    ("https://nsearchives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv", "Nifty Microcap 250"),
+]
+INDEX_NAME = " + ".join(name for _, name in BENCH_INDICES)
 
 
 # ---------------------------------------------------------------- maths
@@ -171,23 +174,34 @@ def load_book():
     return holdings
 
 
+def fetch_index_csv(url, name):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8-sig")
+    except Exception as e:
+        sys.exit(f"could not fetch the {name} list ({e}) — signals.json left untouched")
+    syms = [r["Symbol"].strip() for r in csv.DictReader(io.StringIO(raw)) if r.get("Symbol")]
+    if len(syms) < 100:
+        sys.exit(f"{name} list looks wrong: {len(syms)} symbols")
+    return syms
+
+
 def constituents():
-    """Index constituents, straight from NSE.
+    """Union of BENCH_INDICES' constituents, straight from NSE.
 
     No embedded fallback list on purpose: if NSE is unreachable the run aborts
     and signals.json keeps yesterday's numbers, which is honest. A stale hard-
     coded proxy would silently score the book against the wrong cross-section
     and nothing on the dashboard would say so.
     """
-    req = urllib.request.Request(INDEX_CSV, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8-sig")
-    except Exception as e:
-        sys.exit(f"could not fetch the {INDEX_NAME} list ({e}) — signals.json left untouched")
-    syms = [r["Symbol"].strip() for r in csv.DictReader(io.StringIO(raw)) if r.get("Symbol")]
-    if len(syms) < 100:
-        sys.exit(f"{INDEX_NAME} list looks wrong: {len(syms)} symbols")
-    return syms
+    out = []
+    for url, name in BENCH_INDICES:
+        out += fetch_index_csv(url, name)
+    dupes = len(out) - len(set(out))
+    if dupes:
+        sys.exit(f"BENCH_INDICES overlap by {dupes} symbols — they must be disjoint "
+                  f"or a stock gets double weight in the benchmark")
+    return out
 
 
 def fetch(symbols):

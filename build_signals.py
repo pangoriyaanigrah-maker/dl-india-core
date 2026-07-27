@@ -36,10 +36,13 @@ CUTS = {"large": 67000, "mid": 22000}
 # Beta benchmark. Nifty 50 — the index the book is actually discussed against.
 INDEX = "^NSEI"
 
-# Cross-sectional universe: the real Nifty 500, pulled from NSE's own
-# constituent list. Every z-score, and the sector/size benchmark, is computed
-# across these names.
-NIFTY500_CSV = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+# Cross-sectional universe: Nifty Smallcap 250, from NSE's own constituent
+# list. The book is small/SME names, so this is the peer group that makes a
+# z-score mean something — against the Nifty 500 they all read as extreme on
+# size alone. Swap the filename to change index; ind_niftytotalmarket_list.csv
+# (751 names) is the broadest, at the cost of reintroducing the large-cap skew.
+INDEX_CSV = "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv"
+INDEX_NAME = "Nifty Smallcap 250"
 
 
 # ---------------------------------------------------------------- maths
@@ -168,22 +171,22 @@ def load_book():
     return holdings
 
 
-def nifty500():
-    """Official Nifty 500 constituents, straight from NSE.
+def constituents():
+    """Index constituents, straight from NSE.
 
     No embedded fallback list on purpose: if NSE is unreachable the run aborts
     and signals.json keeps yesterday's numbers, which is honest. A stale hard-
     coded proxy would silently score the book against the wrong cross-section
     and nothing on the dashboard would say so.
     """
-    req = urllib.request.Request(NIFTY500_CSV, headers={"User-Agent": "Mozilla/5.0"})
+    req = urllib.request.Request(INDEX_CSV, headers={"User-Agent": "Mozilla/5.0"})
     try:
         raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8-sig")
     except Exception as e:
-        sys.exit(f"could not fetch the Nifty 500 list ({e}) — signals.json left untouched")
+        sys.exit(f"could not fetch the {INDEX_NAME} list ({e}) — signals.json left untouched")
     syms = [r["Symbol"].strip() for r in csv.DictReader(io.StringIO(raw)) if r.get("Symbol")]
-    if len(syms) < 400:
-        sys.exit(f"Nifty 500 list looks wrong: {len(syms)} symbols, expected ~500")
+    if len(syms) < 100:
+        sys.exit(f"{INDEX_NAME} list looks wrong: {len(syms)} symbols")
     return syms
 
 
@@ -233,11 +236,11 @@ def build():
                        else [f'{h["tk"]}.NS', f'{h["tk"]}.BO']
               for h in holdings}
 
-    universe = [f"{t}.NS" for t in nifty500()]
+    universe = [f"{t}.NS" for t in constituents()]
     symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs}
                      | {INDEX})               # INDEX is the beta benchmark
     print(f"fetching {len(symbols)} symbols ({len(wanted)} holdings + "
-          f"{len(universe)} Nifty 500 + index)...")
+          f"{len(universe)} {INDEX_NAME} + index)...")
     px, info, close_df = fetch(symbols)
 
     # Resolve each holding to the first candidate that actually returned data.
@@ -303,7 +306,8 @@ def build():
 
     return {
         "asof": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"),
-        "note": "z-scores are cross-sectional vs the official Nifty 500 constituents "
+        "index": INDEX_NAME,
+        "note": f"z-scores are cross-sectional vs the official {INDEX_NAME} constituents "
                 "(NSE list, fetched nightly); the sector/size benchmark is market-cap "
                 "weighted over the same names — full mcap, not free-float. "
                 "value = cheapness on P/E, P/B, EV/EBITDA; "

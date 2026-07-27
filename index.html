@@ -76,21 +76,6 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
 .insight b{color:var(--text);font-weight:600}
 .insight .tag{font-family:'IBM Plex Mono';font-size:10px;letter-spacing:.12em;text-transform:uppercase;
   color:var(--saffron);display:block;margin-bottom:4px}
-/* ---------- factor rails ---------- */
-.frail{margin-bottom:22px}
-.frail .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
-.frail .nm{font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
-.frail .zval{font-family:'IBM Plex Mono';font-size:14px;font-weight:600;color:var(--saffron)}
-.frail .axis{position:relative;height:30px;background:var(--panel);border:1px solid var(--line);border-radius:6px}
-.frail .zero{position:absolute;left:50%;top:4px;bottom:4px;width:1px;background:var(--faint)}
-.frail .gridl{position:absolute;top:8px;bottom:8px;width:1px;background:var(--line)}
-.frail .hdot{position:absolute;top:50%;width:7px;height:7px;border-radius:50%;
-  background:var(--blue);opacity:.55;transform:translate(-50%,-50%)}
-.frail .wmark{position:absolute;top:50%;width:12px;height:12px;background:var(--saffron);
-  transform:translate(-50%,-50%) rotate(45deg);border-radius:2px}
-.frail .lbls{display:flex;justify-content:space-between;font-family:'IBM Plex Mono';
-  font-size:9.5px;color:var(--faint);margin-top:4px}
-.frail .note{font-family:'IBM Plex Mono';font-size:11px;color:var(--faint);margin-top:5px}
 /* ---------- tables ---------- */
 .twrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
 .ptable{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono';font-size:12px;min-width:640px}
@@ -607,21 +592,6 @@ function renderOverview(){
   (Yahoo Finance, refreshed nightly by GitHub Actions).</div>`;
 }
 /* ================= RENDER: EXPOSURES ================= */
-function frailHTML(name, note, getZ){
-  const wz = wavg(h=>{const s=sig(h.tk); return s?getZ(s):null;});
-  const x = z => (Math.min(2.4, Math.max(-2.4, z))/2.5*50 + 50).toFixed(1)+"%";
-  const dots = state.holdings.map(h=>{
-    const s = sig(h.tk); if(!s) return "";
-    return `<div class="hdot" style="left:${x(getZ(s))}" title="${esc(h.tk)}"></div>`;
-  }).join("");
-  const grid = [-2,-1,1,2].map(g=>`<div class="gridl" style="left:${x(g)}"></div>`).join("");
-  return `<div class="frail">
-    <div class="top"><span class="nm">${name}</span><span class="zval">${fmt.z(wz)}</span></div>
-    <div class="axis">${grid}<div class="zero"></div>${dots}<div class="wmark" style="left:${x(wz)}"></div></div>
-    <div class="lbls"><span>−2σ</span><span>index</span><span>+2σ</span></div>
-    <div class="note">${note}</div>
-  </div>`;
-}
 function renderExposures(){
   const el = document.getElementById("exp-body");
   const wSec = {};
@@ -651,13 +621,16 @@ function renderExposures(){
     const cell = r => r ? `${esc(r.tk)} <span class="${r.z>=0?"pos":"neg"}">${fmt.z(r.z)}</span>`
                         : `<span style="color:var(--faint)">—</span>`;
     const zc = v => v>=0.3 ? "pos" : v<=-0.3 ? "neg" : "";
-    return `<tr><td>${name}<div style="font-size:10px;color:var(--faint);white-space:normal">${note}</div></td>
+    // Coverage rides in the note rather than its own column: without it,
+    // "highest momentum" reads as beating all 15 when it only beat the 11 scored.
+    const cover = scored.length < state.holdings.length
+      ? ` · ${scored.length} of ${state.holdings.length} names scored` : "";
+    return `<tr><td>${name}<div style="font-size:10px;color:var(--faint);white-space:normal">${note}${cover}</div></td>
       <td class="${zc(wz)}" style="font-weight:600">${scored.length?fmt.z(wz):"—"}</td>
       <td style="text-align:left">${!scored.length?"no data"
          : wz>=0.3?"Above index" : wz<=-0.3?"Below index" : "Near index"}</td>
       <td>${cell(scored[0])}</td>
-      <td>${cell(scored[scored.length-1])}</td>
-      <td>${scored.length}/${state.holdings.length}</td></tr>`;
+      <td>${cell(scored[scored.length-1])}</td></tr>`;
   }).join("");
   const secRows = held.sort((a,b)=>wSec[b]-wSec[a]).map(s=>{
     const pw = wSec[s]/W(), bw = BENCH_SECT[s]||0, act = pw-bw;
@@ -670,15 +643,9 @@ function renderExposures(){
       <td>0.0%</td><td>${(notHeldW*100).toFixed(1)}%</td>
       <td class="neg">${fmt.pct(-notHeldW)}</td><td>—</td></tr>`;
   el.innerHTML = `
-  <div class="sec">Factor profile <small>saffron diamond = weighted book · blue dots = holdings · axis = z vs NSE universe proxy</small></div>
-  <div class="panel" style="margin-bottom:18px">
-    ${frailHTML("Value", "Composite of P/E (forward where available, else trailing), P/B, EV/EBITDA. Positive = cheaper than the universe.", s=>s.val)}
-    ${frailHTML("Momentum", "12M−1M plus 6M price return. Needs a year of history, so recent listings score blank rather than on a stub.", s=>s.momo)}
-    ${frailHTML("Quality", "ROE, leverage and net margin, equally weighted. No accruals or margin-stability term — those need multi-period statements the feed doesn't pull.", s=>s.qual)}
-  </div>
-  <div class="sec">Factor summary <small>book tilt, and the name at each end of every factor</small></div>
+  <div class="sec">Factor profile <small>weighted z-scores vs the NSE universe cross-section</small></div>
   <div class="twrap" style="margin-bottom:18px"><table class="ptable">
-    <thead><tr><th>Factor</th><th>Book</th><th style="text-align:left">Tilt</th><th>Highest</th><th>Lowest</th><th>Scored</th></tr></thead>
+    <thead><tr><th>Factor</th><th>Book</th><th style="text-align:left">Tilt</th><th>Highest</th><th>Lowest</th></tr></thead>
     <tbody>${factorRows}</tbody>
   </table></div>
   <div class="sec">Size <small>${benchLive?"vs live mcap-weighted NSE universe benchmark":"vs static placeholder weights"}</small></div>

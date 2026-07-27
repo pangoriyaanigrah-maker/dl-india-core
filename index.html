@@ -1109,6 +1109,13 @@ function handleFile(file, slot){
       }
       if (slot==="h" && (!holdings || !holdings.length)) throw "No valid holdings rows found.";
       if (slot==="t" && (!trades || !trades.length)) throw "No valid trade rows found.";
+      // A ticker never contains a space; a sector or company name usually does.
+      // Seeing them here means the header matched the wrong column, and loading
+      // would silently replace the book with nonsense rather than fail.
+      const notTickers = (holdings||[]).filter(h=>/\s/.test(h.tk)).map(h=>h.tk);
+      if (notTickers.length)
+        throw `Column mapping looks wrong — these were read as tickers: ${notTickers.slice(0,4).join(", ")}` +
+          `${notTickers.length>4?" …":""}. Check the Portfolio sheet has a "Ticker" header row above the data.`;
       staged = { ...state,
         // Excel is the only input now, so it owns cash too: same rule as
         // xlsx_to_book.py, cash = whatever the weights don't claim.

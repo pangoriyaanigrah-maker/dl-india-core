@@ -132,7 +132,11 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
 .rail .add{position:absolute;top:8px;width:2px;height:10px;background:var(--blue)}
 .rail .cmp{position:absolute;top:8.5px;width:9px;height:9px;border-radius:50%;
   background:var(--ink);border:2px solid var(--up);transform:translateX(-50%)}
-.rail .lo,.rail .tg{position:absolute;top:-6px;font-family:'IBM Plex Mono';font-size:9.5px;color:var(--faint)}
+/* nowrap: "TP 2,188" wrapping to a second line is what dropped the label onto
+   the track. The rail is only 26px tall, so a two-line label always collides. */
+.rail{padding-top:4px}
+.rail .lo,.rail .tg{position:absolute;top:-7px;font-family:'IBM Plex Mono';font-size:9.5px;
+  color:var(--faint);white-space:nowrap;line-height:1}
 .rail .tg{color:var(--saffron)}
 .detail{display:none;font-size:14px;color:var(--dim);line-height:1.55;
   border-top:1px dashed var(--line);margin:0 16px;padding:11px 0 14px}
@@ -207,11 +211,15 @@ button.ghost{background:none;color:var(--saffron)}
 <div class="tabs" role="tablist">
   <button class="tab active" id="t-ov" onclick="showView('ov')">Overview</button>
   <button class="tab" id="t-exp" onclick="showView('exp')">Exposures</button>
+  <button class="tab" id="t-risk" onclick="showView('risk')">Risk</button>
+  <button class="tab" id="t-perf" onclick="showView('perf')">Performance</button>
   <button class="tab" id="t-posn" onclick="showView('posn')">Positions</button>
   <button class="tab" id="t-imp" onclick="showView('imp')">Import</button>
 </div>
 <div class="view active" id="v-ov"><div id="ov-body"></div></div>
 <div class="view" id="v-exp"><div id="exp-body"></div></div>
+<div class="view" id="v-risk"><div id="risk-body"></div></div>
+<div class="view" id="v-perf"><div id="perf-body"></div></div>
 <div class="view" id="v-posn">
   <div class="cols">
     <div>Name</div><div>Weight</div><div>CMP → Target</div><div>Upside</div><div>Signals</div><div>Status</div>
@@ -423,7 +431,7 @@ const builtOf = h => h.fullWt===0 ? "Exiting" : h.fullWt ? (h.wt>=h.fullWt-0.001
 const W = () => state.holdings.reduce((a,h)=>a+h.wt,0) || 1;
 const wavg = f => state.holdings.reduce((a,h)=>{const v=f(h); return v==null?a:a+h.wt*v;},0)/W();
 function showView(v){
-  for (const k of ["ov","exp","posn","imp"]){
+  for (const k of ["ov","exp","risk","perf","posn","imp"]){
     document.getElementById("v-"+k).classList.toggle("active", k===v);
     document.getElementById("t-"+k).classList.toggle("active", k===v);
   }
@@ -676,9 +684,13 @@ function renderPositions(){
       const loAnchor = h.addLvl ? Math.min(lo, h.addLvl*0.98) : lo;
       const span = hiAnchor*1.03 - loAnchor;
       const x = v => (Math.min(99, Math.max(0,(v-loAnchor)/span*100))).toFixed(1)+"%";
+      // Right-align the TP label so it sits inside the rail — except when the
+      // target is near the left end (a target-hit name), where right-aligning
+      // runs it straight back over the low label. Then drop the low label.
+      const tpPct = parseFloat(x(h.tp));
       railHtml = `<div class="rail">
-        <span class="lo" style="left:0">${Math.round(loAnchor).toLocaleString("en-IN")}</span>
-        <span class="tg" style="left:${x(h.tp)};transform:translateX(-100%)">TP ${Math.round(h.tp).toLocaleString("en-IN")}</span>
+        ${tpPct > 34 ? `<span class="lo" style="left:0">${Math.round(loAnchor).toLocaleString("en-IN")}</span>` : ""}
+        <span class="tg" style="left:${x(h.tp)};transform:translateX(${tpPct > 34 ? "-100%" : "0"})">TP ${Math.round(h.tp).toLocaleString("en-IN")}</span>
         <div class="track"></div>
         ${h.addLvl?`<div class="add" style="left:${x(h.addLvl)}" title="Add ₹${h.addLvl}"></div>`:""}
         <div class="tp" style="left:${x(h.tp)}"></div>
@@ -706,7 +718,180 @@ function renderPositions(){
     </div>`;
   }).join("");
 }
-function renderAll(){ renderOverview(); renderExposures(); renderPositions(); }
+/* ================= RENDER: RISK =================
+   Every scenario is a price the book has actually traded at, or a move it has
+   actually made — no covariance model, no simulated distribution. f() returns
+   null when the feed lacks the input (a recent listing has no 5-year history),
+   and that name is dropped from the scenario rather than counted as zero. */
+const SCENARIOS = [
+  {key:"mid",   name:"Mid of 52W range", desc:"every stock reverts to (52W high + low) / 2",
+   f:s=> (s.hi!=null && s.lo!=null && s.cmp) ? ((s.hi+s.lo)/2)/s.cmp-1 : null},
+  {key:"give1m",name:"Give up 1M gains",  desc:"stocks that rose unwind the month; decliners held flat",
+   f:s=> s.r1m!=null ? Math.min(0, 1/(1+s.r1m)-1) : null},
+  {key:"low",   name:"Retest 52W low",    desc:"every stock trades back to its 52-week low",
+   f:s=> (s.lo!=null && s.cmp) ? s.lo/s.cmp-1 : null},
+  {key:"worst", name:"Worst month repeats", desc:"each stock repeats its worst 1-month window of the last 5 years",
+   f:s=> s.worstM ?? null},
+];
+function renderRisk(){
+  const el = document.getElementById("risk-body");
+  const H = state.holdings.filter(h=>sig(h.tk));
+  if (!H.length){
+    el.innerHTML = `<div class="panel" style="text-align:center;font-family:'IBM Plex Mono';
+      font-size:13px;color:var(--dim);padding:40px">No priced holdings — run build_signals.py.</div>`;
+    return;
+  }
+  const scen = SCENARIOS.map(sc=>{
+    const rows = H.map(h=>{ const chg = sc.f(sig(h.tk));
+      return { tk:h.tk, wt:h.wt, chg, nav: chg==null?null:h.wt*chg }; });
+    const priced = rows.filter(r=>r.nav!=null);
+    return { ...sc, rows, priced, total: priced.reduce((a,r)=>a+r.nav,0),
+             missing: rows.length - priced.length };
+  });
+  const wBeta = wavg(h=>sig(h.tk)?.beta);
+  const mid = scen[0].priced.slice().sort((a,b)=>a.nav-b.nav);
+  const worstTwo = mid.slice(0,2);
+  const worstShare = (scen[0].total && worstTwo.length===2)
+    ? (worstTwo[0].nav+worstTwo[1].nav)/scen[0].total : 0;
+  const maxAbs = Math.max(...scen.map(s=>Math.abs(s.total)), 0.001);
+  const pc = v => v==null ? "—" : fmt.pct(v);
+
+  const reads = [];
+  reads.push([`Read`, `The ladder is deliberately conservative: <b>every stock moves at once, with no
+    correlation credit</b>. A real book would usually lose less. The ${fmt.w(state.cash)} cash cushion is
+    already reflected, because impacts are expressed on NAV rather than on equity.`]);
+  if (worstShare > 0.35)
+    reads.push([`Concentration of risk`, `<b>${worstTwo.map(r=>esc(r.tk)).join(" + ")}</b> carry
+      ${(worstShare*100).toFixed(0)}% of the mid-range scenario loss — the same names driving return are
+      driving the tail. Size them against this, not against their weight alone.`]);
+  if (wBeta)
+    reads.push([`Beta`, `Weighted beta ${wBeta.toFixed(2)} on ${fmt.w(W())} equity ≈
+      <b>${(wBeta*W()).toFixed(2)} portfolio beta to the Nifty</b>. A 10% index fall implies roughly
+      ${fmt.pct(-0.10*wBeta*W())} on NAV before anything stock-specific.`]);
+  const thin = scen[0].missing;
+  if (thin)
+    reads.push([`Coverage`, `<b>${thin} of ${H.length}</b> holdings have no 5-year history yet
+      (recent listings). They are excluded from the ladder rather than counted as unchanged, so the
+      totals below understate a full-book move.`]);
+
+  el.innerHTML = `
+  <div class="stats">
+    ${[["Wtd beta", wBeta?wBeta.toFixed(2):"—", wBeta?"portfolio "+(wBeta*W()).toFixed(2)+" incl. cash":"no beta yet",""],
+       ...scen.map(s=>[s.name, pc(s.total), "NAV impact", s.total>=0?"pos":"neg"])]
+      .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
+  </div>
+  <div class="sec">Scenario ladder <small>NAV impact if the whole book moves at once — no correlation credit</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    ${scen.map(s=>{
+      const w = Math.abs(s.total)/maxAbs*48, left = s.total<0 ? 50-w : 50;
+      return `<div class="plbar" style="grid-template-columns:160px 1fr 84px">
+        <div title="${esc(s.desc)}">${esc(s.name)}</div>
+        <div class="axis"><div class="zero"></div>
+          <div class="bar" style="left:${left}%;width:${w}%;background:${s.total>=0?"var(--up)":"var(--down)"}"></div></div>
+        <div class="val ${s.total>=0?"pos":"neg"}">${pc(s.total)}</div></div>`;
+    }).join("")}
+  </div>
+  <div class="sec">Per-stock scenarios <small>price change · NAV impact in brackets</small></div>
+  <div class="twrap" style="margin-bottom:18px"><table class="ptable">
+    <thead><tr><th>Ticker</th><th>Wt</th>${SCENARIOS.map(s=>`<th>${esc(s.name)}</th>`).join("")}</tr></thead>
+    <tbody>
+    ${H.map(h=>`<tr><td>${esc(h.tk)}</td><td>${fmt.w(h.wt)}</td>` +
+      SCENARIOS.map(sc=>{ const chg = sc.f(sig(h.tk));
+        if (chg==null) return `<td style="color:var(--faint)">—</td>`;
+        return `<td class="${chg>=0?"pos":"neg"}">${fmt.pct(chg)}
+          <span style="color:var(--faint)">(${(h.wt*chg*10000).toFixed(0)}bp)</span></td>`;
+      }).join("") + `</tr>`).join("")}
+    <tr><td style="font-weight:600">PORTFOLIO</td><td>${fmt.w(W())}</td>
+      ${scen.map(s=>`<td class="${s.total>=0?"pos":"neg"}" style="font-weight:600">${pc(s.total)}</td>`).join("")}</tr>
+    </tbody>
+  </table></div>
+  <div class="sec">Stock risk metrics <small>from 5 years of daily prices</small></div>
+  <div class="twrap" style="margin-bottom:18px"><table class="ptable">
+    <thead><tr><th>Ticker</th><th>Beta</th><th>Daily σ</th><th>Worst 1M</th><th>Max drawdown</th><th>52W range position</th></tr></thead>
+    <tbody>
+    ${H.map(h=>{ const s = sig(h.tk);
+      const p52 = (s.hi!=null && s.lo!=null && s.hi>s.lo) ? (s.cmp-s.lo)/(s.hi-s.lo) : null;
+      const d = (v,f) => v==null ? `<span style="color:var(--faint)">—</span>` : f(v);
+      return `<tr><td>${esc(h.tk)}</td>
+        <td>${d(s.beta, v=>v.toFixed(2))}</td>
+        <td>${d(s.dvol, v=>(v*100).toFixed(1)+"%")}</td>
+        <td class="neg">${d(s.worstM, v=>fmt.pct(v))}</td>
+        <td class="neg">${d(s.mdd, v=>fmt.pct(v))}</td>
+        <td>${d(p52, v=>(v*100).toFixed(0)+"% <span style='color:var(--faint)'>of 52W range</span>")}</td></tr>`;
+    }).join("")}
+    </tbody>
+  </table></div>
+  ${reads.map(([tag,txt])=>`<div class="insight"><span class="tag">${tag}</span>${txt}</div>`).join("")}
+  <div class="foot">Every figure here is historical and descriptive — worst month and max drawdown are
+  what happened, not a forecast. Computed nightly from 5 years of daily closes; beta is against the
+  Nifty 50 on shared trading days. No covariance model: each number is reproducible from the price series.</div>`;
+}
+/* ================= RENDER: PERFORMANCE ================= */
+function renderPerformance(){
+  const el = document.getElementById("perf-body");
+  if (!state.trades.length){
+    el.innerHTML = `<div class="panel" style="text-align:center;font-family:'IBM Plex Mono';
+      font-size:13px;color:var(--dim);padding:40px;line-height:1.9">
+      No trades loaded — P&L needs executions.<br>
+      Add a <b>Trades</b> sheet (Date, Ticker, Side, Qty, Price, Costs) and upload it on the Import tab.</div>`;
+    return;
+  }
+  const P = perfCalc();
+  const ret = P.bought ? P.total/P.bought : 0;
+  const dates = state.trades.map(t=>t.date).filter(d=>d instanceof Date && !isNaN(d));
+  const range = dates.length ? fmt.d(new Date(Math.min(...dates)))+" – "+fmt.d(new Date(Math.max(...dates))) : "";
+  const maxAbs = Math.max(...P.rows.map(r=>Math.abs(r.total)), 1);
+  const winners = P.rows.filter(r=>r.total>0).length;
+  el.innerHTML = `
+  <div class="stats">
+    ${[["Total P&L",fmt.inr(P.total),"after costs · "+fmt.pct(ret)+" on gross",P.total>=0?"pos":"neg"],
+       ["Realized",fmt.inr(P.realized),"avg-cost basis",P.realized>=0?"pos":"neg"],
+       ["Unrealized",fmt.inr(P.unreal),"marked to feed prices",P.unreal>=0?"pos":"neg"],
+       ["Costs",fmt.inr(P.fees),"brokerage + charges",""],
+       ["Gross bought",fmt.inr(P.bought),state.trades.length+" trades · "+range,""],
+       ["Hit rate",winners+" / "+P.rows.length,"names in profit",""]]
+      .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
+  </div>
+  <div class="sec">P&L by position <small>after costs</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    ${P.rows.map(r=>{
+      const w = Math.abs(r.total)/maxAbs*48, left = r.total<0 ? 50-w : 50;
+      return `<div class="plbar"><div>${esc(r.tk)}</div>
+        <div class="axis"><div class="zero"></div>
+          <div class="bar" style="left:${left}%;width:${w}%;background:${r.total>=0?"var(--up)":"var(--down)"}"></div></div>
+        <div class="val ${r.total>=0?"pos":"neg"}">${fmt.lakh(r.total)}</div></div>`;
+    }).join("")}
+  </div>
+  <div class="sec">Position detail <small>average-cost basis</small></div>
+  <div class="twrap" style="margin-bottom:18px"><table class="ptable">
+    <thead><tr><th>Ticker</th><th>Net Sh</th><th>Avg Cost</th><th>CMP</th><th>Mkt Value</th>
+      <th>Unrealized</th><th>Realized</th><th>Costs</th><th>Total</th><th>Return</th></tr></thead>
+    <tbody>
+    ${P.rows.map(r=>`<tr><td>${esc(r.tk)}${r.marked?"":" *"}</td><td>${r.net.toLocaleString("en-IN")}</td>
+      <td>${fmt.inr(r.avg)}</td><td>${fmt.inr(r.cmp)}</td><td>${fmt.inr(r.net*r.cmp)}</td>
+      <td class="${r.unreal>=0?"pos":"neg"}">${fmt.inr(r.unreal)}</td>
+      <td class="${r.realized>=0?"pos":"neg"}">${fmt.inr(r.realized)}</td>
+      <td>${fmt.inr(r.fees)}</td>
+      <td class="${r.total>=0?"pos":"neg"}">${fmt.inr(r.total)}</td>
+      <td class="${r.ret>=0?"pos":"neg"}">${fmt.pct(r.ret)}</td></tr>`).join("")}
+    </tbody>
+  </table></div>
+  <div class="sec">Trade log <small>${state.trades.length} executions · newest first</small></div>
+  <div class="twrap"><table class="ptable" style="min-width:520px">
+    <thead><tr><th>Date</th><th>Ticker</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th><th>Costs</th></tr></thead>
+    <tbody>
+    ${[...state.trades].sort((a,b)=>(b.date||0)-(a.date||0)).map(t=>
+      `<tr><td>${fmt.d(t.date)}</td><td>${esc(t.tk)}</td>
+        <td class="${t.side==="Buy"?"pos":"neg"}">${t.side}</td>
+        <td>${t.qty.toLocaleString("en-IN")}</td><td>${fmt.inr(t.price)}</td>
+        <td>${fmt.inr(t.qty*t.price)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("")}
+    </tbody>
+  </table></div>
+  <div class="foot">* ticker not in the price feed — marked at its last trade price.
+  Realized P&L uses full-period average cost, matching the Excel; a buy after a sell restates that sell.
+  Return is money-weighted on gross invested — TWR/XIRR would come from the dated cash flows above.</div>`;
+}
+function renderAll(){ renderOverview(); renderExposures(); renderRisk(); renderPerformance(); renderPositions(); }
 /* ================= EDIT: GitHub-backed writes =================
    book.json is the store and the GitHub Contents API is the write path — no
    server, and every save is a commit, so history, blame and revert come free.

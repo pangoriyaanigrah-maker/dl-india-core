@@ -30,6 +30,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # buckets and this benchmark disagree.
 CUTS = {"large": 67000, "mid": 22000}
 
+# Beta benchmark. Nifty 50 — the index the book is actually discussed against.
+INDEX = "^NSEI"
+
 # Cross-sectional universe: a liquid NSE proxy, not the official Nifty 500.
 # Deliberately spans large through small cap. A megacap-only list is worse than
 # useless here — this book is entirely small/SME names, so they'd all sit above
@@ -111,13 +114,67 @@ def blend(*maps):
     return out
 
 
+YEAR = 252                                 # trading days
+MONTH = 21
+
+
 def momentum(closes):
     """12M-1M return plus 6M return — the blend the dashboard's factor rail
     describes. Needs a full year of history, so recent IPOs score None rather
-    than being compared on a stub."""
-    if len(closes) < 200:
+    than being compared on a stub.
+
+    Anchored at closes[-YEAR], not closes[0]: the series is 5 years long now
+    (the risk metrics need it) and closes[0] would silently become a 5-year
+    momentum score."""
+    if len(closes) < YEAR + MONTH:
         return None
-    return (closes[-22] / closes[0] - 1) + (closes[-1] / closes[-126] - 1)
+    return (closes[-MONTH] / closes[-YEAR] - 1) + (closes[-1] / closes[-126] - 1)
+
+
+def risk(closes):
+    """Descriptive risk stats for the Risk tab. All from the price series —
+    no covariance model, every number reproducible.
+
+    worstM is the worst rolling 21-day window rather than the worst calendar
+    month: same question, and it doesn't need the date index carried around.
+    """
+    if len(closes) < MONTH + 2:
+        return {}
+    last = closes[-YEAR:] if len(closes) >= YEAR else closes
+    rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+    mean = sum(rets) / len(rets)
+    dvol = (sum((r - mean) ** 2 for r in rets) / len(rets)) ** 0.5
+
+    peak, mdd = closes[0], 0.0
+    for c in closes:
+        peak = max(peak, c)
+        mdd = min(mdd, c / peak - 1)
+
+    worst = min(closes[i] / closes[i - MONTH] - 1
+                for i in range(MONTH, len(closes)))
+    return {
+        "hi": round(max(last), 2),
+        "lo": round(min(last), 2),          # 52-week, not the 5-year low
+        "r1m": round(closes[-1] / closes[-MONTH] - 1, 4),
+        "worstM": round(worst, 4),
+        "mdd": round(mdd, 4),
+        "dvol": round(dvol, 4),
+    }
+
+
+def beta(close_df, sym, index_sym):
+    """Slope of the stock's daily returns against the index's, on the dates
+    they share. pandas aligns them; a plain list of closes could not."""
+    try:
+        pair = close_df[[sym, index_sym]].pct_change().dropna()
+        if len(pair) < 60:
+            return None
+        var = pair[index_sym].var()
+        if not var:
+            return None
+        return round(pair[sym].cov(pair[index_sym]) / var, 2)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- io
@@ -135,12 +192,14 @@ def load_book():
 
 
 def fetch(symbols):
-    """-> ({symbol: [close, ...]}, {symbol: info}). One bulk price call; the
-    fundamentals endpoint is per-name and flaky, so each is isolated."""
+    """-> ({symbol: [close, ...]}, {symbol: info}, close_dataframe).
+    One bulk price call; the fundamentals endpoint is per-name and flaky, so
+    each is isolated. 5 years, because drawdown and worst-month need it —
+    momentum anchors on an explicit offset rather than the start of the series."""
     import yfinance as yf
 
     px = {}
-    data = yf.download(symbols, period="1y", auto_adjust=True,
+    data = yf.download(symbols, period="5y", auto_adjust=True,
                        progress=False, group_by="column")
     close = data["Close"]
     for s in symbols:
@@ -158,7 +217,7 @@ def fetch(symbols):
             info[s] = yf.Ticker(s).info or {}
         except Exception:                      # yfinance raises freely here
             info[s] = {}
-    return px, info
+    return px, info, close
 
 
 def num(d, *keys):
@@ -179,10 +238,11 @@ def build():
               for h in holdings}
 
     universe = [f"{t}.NS" for t in UNIVERSE]
-    symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs})
+    symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs}
+                     | {INDEX})               # INDEX is the beta benchmark
     print(f"fetching {len(symbols)} symbols ({len(wanted)} holdings + "
-          f"{len(universe)} universe)...")
-    px, info = fetch(symbols)
+          f"{len(universe)} universe + index)...")
+    px, info, close_df = fetch(symbols)
 
     # Resolve each holding to the first candidate that actually returned data.
     resolved, errors = {}, []
@@ -214,13 +274,22 @@ def build():
 
     signals = {}
     for tk, s in resolved.items():
+        r = risk(px[s])
         signals[tk] = {
             "cmp": round(px[s][-1], 2),
             "mcap": round(mcap[s]) or None,
-            "lo": round(min(px[s]), 2),
+            # hi/lo are 52-week even though the series is 5 years; a 5-year low
+            # would stretch the price rail until the current price pinned right.
+            "lo": r.get("lo", round(min(px[s]), 2)),
+            "hi": r.get("hi"),
             "val": val.get(s),
             "momo": momo.get(s),
             "qual": qual.get(s),
+            "r1m": r.get("r1m"),
+            "worstM": r.get("worstM"),
+            "mdd": r.get("mdd"),
+            "dvol": r.get("dvol"),
+            "beta": beta(close_df, s, INDEX),
         }
 
     # Benchmark: market-cap weighted over the universe names that priced.
@@ -272,11 +341,24 @@ def selftest():
     assert blend({"a": 1.0}, {"a": 2.0}, {"a": None}) == {"a": 1.5}
     assert blend({"a": None}, {"a": None}) == {"a": None}
 
-    assert momentum([1.0] * 199) is None, "short history must not score"
-    flat = [10.0] * 250
+    assert momentum([1.0] * 250) is None, "short history must not score"
+    flat = [10.0] * 400
     assert abs(momentum(flat)) < 1e-9, "flat series has no momentum"
-    rising = [float(i) for i in range(1, 251)]
+    rising = [float(i) for i in range(1, 401)]
     assert momentum(rising) > 0, "monotonic rise must be positive momentum"
+    # anchored at -YEAR, not the start: a 5y series must not read as 5y momentum
+    spike = [1.0] * 200 + [float(i) for i in range(1, 301)]
+    assert abs(momentum(spike) - momentum(spike[-400:])) < 1e-9, \
+        "momentum must ignore history older than a year"
+
+    assert risk([1.0] * 10) == {}, "too little history yields no risk stats"
+    r = risk([100.0] * 300)
+    assert r["mdd"] == 0 and r["dvol"] == 0 and r["worstM"] == 0, r
+    down = [100.0] * 50 + [50.0] * 50                    # a clean 50% drawdown
+    assert abs(risk(down)["mdd"] + 0.5) < 1e-9, risk(down)["mdd"]
+    assert risk(down)["worstM"] < -0.4, "the drop must show as the worst window"
+    hl = risk([float(i) for i in range(1, 401)])
+    assert hl["hi"] == 400 and hl["lo"] == 149, (hl["hi"], hl["lo"])  # last 252 only
 
     assert num({"a": 0, "b": 3}, "a", "b") == 3.0, "zero must fall through"
     assert num({"a": float("nan")}, "a") is None

@@ -243,7 +243,12 @@ button.ghost{background:none;color:var(--saffron)}
       <button class="act ghost" onclick="resetImport()">Clear</button>
     </div>
   </div>
-  <div class="sec" style="margin-top:26px">Saved book <small>every upload is kept and reloaded automatically</small></div>
+  <div class="sec" style="margin-top:26px">Save permanently <small>nothing is written until you click this</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    Loading a file only shows it on screen and can be reviewed across every tab first. Upload the
+    holdings file, then the trades file (or either alone), check the numbers, then save both together.
+    <div class="btnrow"><button class="act" onclick="savePermanently()">Save Permanently</button></div>
+  </div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
     <b>Division of labour:</b> analysts own weights, targets, theses and entry/exit strategy (holdings file);
@@ -254,10 +259,11 @@ button.ghost{background:none;color:var(--saffron)}
     benchmark index (NSE's own list, re-fetched each run), and writes
     signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
     not touch the signal feed.<br>
-    <b>Saving is automatic.</b> An upload replaces the whole book and is remembered, so it loads
-    again every time you open the dashboard — no button to press, nothing to set up. Point it at
-    book.sqlite as well and the nightly price job sees stocks you add; connect GitHub and the same
-    book follows you to another machine, as commits you can revert.
+    <b>Saving is manual, on purpose.</b> Load shows a file on screen without writing anything;
+    <b>Save Permanently</b> is the one action that commits it to disk and, if connected, to GitHub —
+    with a confirmation naming exactly what's about to be saved. There is deliberately no delete
+    button in the app; see reset_book.py in the repo for how to wipe the book, run by hand, outside
+    the dashboard.
 </div>
 <script>
 /* ================= DATA ================= */
@@ -450,9 +456,14 @@ async function loadBook(){
       ? `Holdings: ${label} - ${j.holdings.length} names${j.updated ? " - " + j.updated : ""}`
       : "No holdings yet -- upload a holdings file (and a trades file) on the Import tab.",
     srcT: trades.length ? `Trades: ${trades.length}` : "No trades recorded" };
+  // What's genuinely persisted right now, as of this load -- Save Permanently
+  // diffs against this (not against whatever's merely on screen) to find
+  // tickers that are actually new to the saved book.
+  lastSavedTickers = new Set(state.holdings.map(h=>h.tk));
   renderAll(); renderGh();
 }
 let staged = null, activeSlot = null;
+let lastSavedTickers = new Set();   // populated by loadBook(); see Save Permanently below
 /* ================= HELPERS ================= */
 /* Every holding field is operator-entered free text rendered through innerHTML.
    Escape at the render site, never at rest: a book stored pre-escaped round-trips
@@ -1030,26 +1041,26 @@ function renderGh(){
   const el = document.getElementById("ghpanel");
   if (!el) return;
   const mini = "font-size:11px;padding:3px 10px;margin-left:8px";
-  // Three distinct situations, not two: writing to disk actually failed (only
-  // possible when running locally), can never work here because this is a
-  // static host with no server to write to (expected, not an error), or it's
-  // genuinely working. A static host was previously told to run
-  // start_dashboard.bat, which is local-only advice that makes no sense there.
-  const statusMsg = diskOk !== false
-    ? `<b style="color:var(--up)">✓ Uploads save automatically to book.sqlite</b> and reload every
-       time you open the dashboard. Nothing to set up. That's the file build_signals.py reads,
-       so a stock you add gets prices from tonight's run.`
+  // Four situations now that saving is a deliberate click, not automatic:
+  // never attempted yet, worked, failed while running locally, or can never
+  // work here because this is a static host with no server to write to
+  // (expected, not an error -- previously told to run start_dashboard.bat,
+  // which is local-only advice that makes no sense on a hosted page).
+  const statusMsg = diskOk === null
+    ? `Not saved yet. Upload a holdings file (and a trades file), then click <b>Save Permanently</b>
+       above.`
+    : diskOk === true
+    ? `<b style="color:var(--up)">✓ Last save reached book.sqlite on disk.</b> That's the file
+       build_signals.py reads, so a new ticker gets prices from the next run.`
     : !isLocalHost
-    ? `<b style="color:var(--amber)">Uploads save to GitHub (if connected below) or this browser only.</b>
-       This is a static hosted page -- there's no server here to write book.sqlite to disk, so that
-       part is never available on this link. Connect GitHub for a save that survives across visits
-       and machines; otherwise it's remembered in this browser only.`
-    : `<b style="color:var(--amber)">Uploads are saved in this browser only.</b>
-       book.sqlite on disk isn't being written, so the nightly price job won't see stocks you add.
+    ? `<b style="color:var(--amber)">Disk save isn't available on this page.</b>
+       This is a static hosted page -- there's no server here to write book.sqlite to, so that part
+       is never available on this link. Connect GitHub below for a save that survives across visits
+       and machines; otherwise Save Permanently keeps it in this browser only.`
+    : `<b style="color:var(--amber)">The last save reached this browser only, not disk.</b>
+       book.sqlite on disk wasn't written, so the nightly price job won't see stocks you added.
        Start the dashboard with <b>start_dashboard.bat</b> to fix that.`;
-  let head = `<div class="ghstat" style="margin-bottom:12px">${statusMsg}</div>
-    <div class="btnrow"><button class="act ghost" style="border-color:rgba(228,96,78,.5);color:var(--down)"
-      onclick="deleteAllData()">Delete all data</button></div>`;
+  let head = `<div class="ghstat" style="margin-bottom:12px">${statusMsg}</div>`;
   const saved = localStorage.getItem(BOOK_KEY);
   if (saved){
     let d = {};
@@ -1271,53 +1282,47 @@ async function persistState(commitMessage){
 }
 async function commit(){
   if (!staged) return;
-  // Captured before state is overwritten: a trades-only upload leaves holdings
-  // untouched, so this set matches the new one exactly and nothing "new" is
-  // ever found -- the trigger below only ever fires for a genuinely new ticker.
-  const prevTickers = new Set(state.holdings.map(h=>h.tk));
   state = staged; staged = null; renderAll(); showView("ov");
   const msg = document.getElementById("msg");
-  const r = await persistState(`bulk: replace book from ${state.srcH.replace(/^Holdings: /, "")}`);
+  msg.className = "msg ok";
+  msg.textContent = `Loaded on screen -- not saved yet. Review, then click "Save Permanently" below ` +
+    `to store ${state.holdings.length} holdings and ${state.trades.length} trades for good.`;
+}
+async function savePermanently(){
+  const n = state.holdings.length, m = state.trades.length;
+  if (!n && !m){ alert("Nothing to save yet -- upload a holdings file first."); return; }
+  if (!confirm(`Save ${n} holdings and ${m} trades permanently?\n\n` +
+               `This writes book.sqlite to disk${canEdit() ? " and commits it to GitHub" : ""}. ` +
+               `There is no undo button in the app -- see reset_book.py to wipe it later.`)) return;
+  const msg = document.getElementById("msg");
+  const r = await persistState(`save: ${n} holdings, ${m} trades (${state.srcH.replace(/^Holdings: /, "")})`);
   if (r.ghError){
     msg.className = "msg err";
-    msg.textContent = `Loaded on screen, but the GitHub save failed: ${r.ghError} -- ` +
-      (r.onDisk ? "saved to book.sqlite on disk instead." : "saved to this browser only.");
+    msg.textContent = `Not fully saved -- the GitHub commit failed: ${r.ghError} -- ` +
+      (r.onDisk ? "it did save to book.sqlite on disk." : "it only saved to this browser.");
     return;
   }
-  const newTickers = state.holdings.map(h=>h.tk).filter(tk=>!prevTickers.has(tk));
-  if (!newTickers.length) return;               // nothing new to report
+  const newTickers = state.holdings.map(h=>h.tk).filter(tk=>!lastSavedTickers.has(tk));
+  lastSavedTickers = new Set(state.holdings.map(h=>h.tk));
+  if (!newTickers.length){
+    msg.className = "msg ok";
+    msg.textContent = "Saved permanently.";
+    return;
+  }
   if (!r.ghSaved){
     msg.className = "msg ok";
-    msg.textContent = `Saved. New ticker(s) ${newTickers.join(", ")} will get prices at tonight's ` +
-      `scheduled run -- connect GitHub above to trigger it immediately instead.`;
+    msg.textContent = `Saved permanently. New ticker(s) ${newTickers.join(", ")} will get prices at ` +
+      `tonight's scheduled run -- connect GitHub above to trigger it immediately instead.`;
     return;
   }
   const res = await triggerNightlyRun();
   msg.className = res.ok ? "msg ok" : "msg err";
   msg.textContent = res.ok
-    ? `Saved. New ticker(s) ${newTickers.join(", ")} -- price fetch triggered now, expect prices in a few minutes.`
-    : `Saved. New ticker(s) ${newTickers.join(", ")} -- couldn't auto-trigger a price fetch (${res.reason}). ` +
+    ? `Saved permanently. New ticker(s) ${newTickers.join(", ")} -- price fetch triggered now, expect prices in a few minutes.`
+    : `Saved permanently. New ticker(s) ${newTickers.join(", ")} -- couldn't auto-trigger a price fetch (${res.reason}). ` +
       `They'll be priced at tonight's scheduled run, or trigger it yourself: Actions -> update-signals -> Run workflow.`;
 }
-async function deleteAllData(){
-  const n = state.holdings.length, m = state.trades.length;
-  if (!n && !m) return;                          // already empty, nothing to do
-  if (!confirm(`Delete all ${n} holdings and ${m} trades?\n\n` +
-               `This clears the live book back to empty. Anything already committed to Git history ` +
-               `(if connected) stays recoverable there -- this only clears what's live now.`)) return;
-  state = { holdings: [], trades: [], cash: 0,
-    srcH: "No holdings yet -- upload a holdings file (and a trades file) on the Import tab.",
-    srcT: "No trades recorded" };
-  renderAll(); showView("imp");
-  const r = await persistState(`delete all holdings and trades (${n} holdings, ${m} trades)`);
-  const msg = document.getElementById("msg");
-  msg.className = r.ghError ? "msg err" : "msg ok";
-  msg.textContent = r.ghError
-    ? `Cleared on screen, but the GitHub save failed: ${r.ghError} -- ` +
-      (r.onDisk ? "saved to book.sqlite on disk instead." : "saved to this browser only.")
-    : `Deleted. Book is empty${r.ghSaved ? " and committed to GitHub"
-        : r.onDisk ? " and saved to book.sqlite on disk" : " (saved to this browser only)"}.`;
-}
+
 
 function resetImport(){
   staged = null;

@@ -1244,16 +1244,33 @@ function handleFile(file, slot){
       if (notTickers.length)
         throw `Column mapping looks wrong — these were read as tickers: ${notTickers.slice(0,4).join(", ")}` +
           `${notTickers.length>4?" …":""}. Check the Portfolio sheet has a "Ticker" header row above the data.`;
+      // Trades are a ledger, not a snapshot -- a new file ADDS to what's already
+      // recorded instead of replacing it, or every trades upload would erase
+      // every trade from before it. Deduped by (date, ticker, side, qty, price)
+      // so re-uploading the same file, or a file with overlapping rows, doesn't
+      // double-count -- only genuinely new rows are added.
+      let tradeDelta = null;
+      if (trades){
+        const key = t => `${t.date instanceof Date ? t.date.toISOString().slice(0,10) : t.date}|${t.tk}|${t.side}|${t.qty}|${t.price}`;
+        const already = new Set(state.trades.map(key));
+        const added = trades.filter(t => !already.has(key(t)));
+        tradeDelta = { merged: state.trades.concat(added), added: added.length, dup: trades.length - added.length };
+      }
       staged = { ...state,
         // Excel is the only input now, so it owns cash too: same rule as
         // xlsx_to_book.py, cash = whatever the weights don't claim.
         ...(holdings ? {holdings, cash: Math.max(0, 1 - holdings.reduce((a,h)=>a+h.wt,0)),
                         srcH:"Holdings: "+file.name} : {}),
-        ...(trades ? {trades, srcT:"Trades: "+file.name} : {}) };
+        ...(trades ? {trades: tradeDelta.merged,
+                       srcT: `Trades: ${tradeDelta.merged.length} on record` +
+                             (tradeDelta.dup ? ` (+${tradeDelta.added} new from ${file.name}, ${tradeDelta.dup} already recorded)`
+                                             : ` (+${tradeDelta.added} new from ${file.name})`)} : {}) };
       const missing = (holdings||[]).filter(h=>!sig(h.tk)).map(h=>h.tk);
       msg.className = "msg ok";
       msg.textContent = (holdings?`Parsed ${holdings.length} holdings`:"") +
-        (holdings&&trades?" and ":"") + (trades?`${trades.length} trades`:"") + ` from ${file.name}.` +
+        (holdings&&trades?" and ":"") +
+        (trades?`${trades.length} trades (${tradeDelta.added} new${tradeDelta.dup?`, ${tradeDelta.dup} already recorded`:""})`:"") +
+        ` from ${file.name}.` +
         (slot==="h" && wbk.Sheets["Trades"]
           ? " Its Trades sheet was IGNORED — drop the file on the Trades zone to load executions." : "") +
         (missing.length ? ` No signal feed for: ${missing.join(", ")} — shown without prices until the feed covers them.` : "") +

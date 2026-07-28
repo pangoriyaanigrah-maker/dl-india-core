@@ -10,6 +10,9 @@ Holdings_File.xlsx
 Holdings_File_TEST.xlsx
 Trades_File_TEST.xlsx
 
+# One-off ad hoc demo files, not a reusable fixture.
+Demo_*.xlsx
+
 # Editor config; start_dashboard.bat is the supported way to run this.
 .claude/
 

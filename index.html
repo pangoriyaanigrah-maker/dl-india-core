@@ -936,6 +936,25 @@ async function ghFetch(method, body, path = "book.json"){
       : (j.message || `GitHub ${r.status}`));
   return j;
 }
+/* Fires the same nightly job on demand (Actions "workflow_dispatch"), so a
+   newly added holding gets a price within minutes instead of waiting for 6pm.
+   Best-effort: needs the token to ALSO carry Actions: Read and write, which
+   the original Contents-only setup doesn't grant — on 403 we say so plainly
+   and the stock still gets priced at tonight's scheduled run regardless. */
+async function triggerNightlyRun(){
+  try{
+    const r = await fetch(`https://api.github.com/repos/${gh.repo}/actions/workflows/update-signals.yml/dispatches`,
+      { method:"POST", headers:{ Authorization:`Bearer ${gh.token}`, Accept:"application/vnd.github+json",
+        "Content-Type":"application/json" }, body: JSON.stringify({ ref: gh.branch || "main" }) });
+    if (r.status === 204) return { ok:true };
+    const j = await r.json().catch(()=>({}));
+    return { ok:false, reason:
+      r.status === 403 ? `token can't trigger workflows — add "Actions: Read and write" permission to it, then reconnect`
+      : r.status === 404 ? "update-signals.yml not found on this branch"
+      : r.status === 401 ? "token rejected"
+      : (j.message || `GitHub ${r.status}`) };
+  }catch(e){ return { ok:false, reason: e.message }; }
+}
 const bookJSON = () => JSON.stringify({
   updated: new Date().toISOString().slice(0,10),
   source: state.srcH.replace(/^Holdings: /, ""),
@@ -983,9 +1002,10 @@ function renderGh(){
          <div class="f"><label>Branch</label><input id="gh-branch" value="main"></div>
          <div class="f wide"><label>Fine-grained token</label>
            <input id="gh-token" type="password" placeholder="github_pat_…">
-           <span class="hint">Needs <b>Contents: Read and write</b> on this one repo, nothing else.
-             Stored in this browser's localStorage — anyone using this browser profile can save with it,
-             so don't connect on a shared machine.</span></div>
+           <span class="hint">Needs <b>Contents: Read and write</b> on this one repo. Add
+             <b>Actions: Read and write</b> too and a new ticker gets priced within minutes of upload,
+             instead of waiting for the 6pm run. Stored in this browser's localStorage — anyone using
+             this browser profile can save with it, so don't connect on a shared machine.</span></div>
        </div>
        <div class="notice" id="gh-msg"></div>
        <div class="btnrow"><button class="act" onclick="ghConnect()">Connect</button></div>`);
@@ -1169,16 +1189,28 @@ function handleFile(file, slot){
 }
 async function commit(){
   if (!staged) return;
+  // Captured before state is overwritten: a trades-only upload leaves holdings
+  // untouched, so this set matches the new one exactly and nothing "new" is
+  // ever found — the trigger below only ever fires for a genuinely new ticker.
+  const prevTickers = new Set(state.holdings.map(h=>h.tk));
   state = staged; staged = null; renderAll(); showView("ov");
   // Disk first — it's the copy build_signals.py reads. Falls back to the browser
   // copy when the page isn't served by serve.py.
   if (await saveToServer()) localStorage.removeItem(BOOK_KEY); else saveLocal();
   renderGh();
-  // Not connected, or no sha read from the API: the browser copy is as far as
-  // it goes. Saving without a sha would clobber the branch instead of failing
-  // on a stale write.
-  if (!canEdit() || !bookSha || ghErr) return;
+  const newTickers = state.holdings.map(h=>h.tk).filter(tk=>!prevTickers.has(tk));
   const msg = document.getElementById("msg");
+  // Not connected, or no sha read from the API: the browser/disk copy is as far
+  // as it goes. Saving without a sha would clobber the branch instead of failing
+  // on a stale write.
+  if (!canEdit() || !bookSha || ghErr){
+    if (newTickers.length){
+      msg.className = "msg ok";
+      msg.textContent = `Saved. New ticker(s) ${newTickers.join(", ")} will get prices at tonight's ` +
+        `scheduled run — connect GitHub above to trigger it immediately instead.`;
+    }
+    return;
+  }
   try{
     await saveBook(`bulk: replace book from ${state.srcH.replace(/^Holdings: /, "")}`);
     renderAll();
@@ -1186,6 +1218,15 @@ async function commit(){
     msg.className = "msg err";
     msg.textContent = "Loaded on screen, but the save failed: " + e.message +
       " — nothing was committed.";
+    return;
+  }
+  if (newTickers.length){
+    const res = await triggerNightlyRun();
+    msg.className = res.ok ? "msg ok" : "msg err";
+    msg.textContent = res.ok
+      ? `Saved. New ticker(s) ${newTickers.join(", ")} — price fetch triggered now, expect prices in a few minutes.`
+      : `Saved. New ticker(s) ${newTickers.join(", ")} — couldn't auto-trigger a price fetch (${res.reason}). ` +
+        `They'll be priced at tonight's scheduled run, or trigger it yourself: Actions → update-signals → Run workflow.`;
   }
 }
 function resetImport(){

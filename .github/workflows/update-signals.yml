@@ -32,5 +32,13 @@ jobs:
           git config user.name "signals-bot"
           git config user.email "actions@github.com"
           git add signals.json
-          git diff --cached --quiet || git commit -m "chore: nightly signals refresh"
+          if git diff --cached --quiet; then
+            echo "signals.json unchanged, nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore: nightly signals refresh"
+          # master can move during the ~2min fetch above (a save from the app,
+          # or another manual run) -- rebase onto whatever's current before
+          # pushing, or a plain push fails outright instead of just retrying.
+          git pull --rebase --autostash origin "${{ github.ref_name }}"
           git push

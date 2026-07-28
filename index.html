@@ -400,6 +400,7 @@ function clearLocal(){ localStorage.removeItem(BOOK_KEY); loadBook(); }
    Returns false when the page isn't being served by serve.py, and the caller
    falls back to the browser copy. */
 let diskOk = null;                        // null = not tried yet, for the panel
+let ghOk = null;                          // same, for the GitHub half of the last save
 // A static host (GitHub Pages, a custom domain, ...) can never run serve.py,
 // so the POST below would always fail there anyway -- skip the round trip
 // entirely and let the panel say so accurately, instead of "not tried yet"
@@ -1046,12 +1047,22 @@ function renderGh(){
   // work here because this is a static host with no server to write to
   // (expected, not an error -- previously told to run start_dashboard.bat,
   // which is local-only advice that makes no sense on a hosted page).
-  const statusMsg = diskOk === null
-    ? `Not saved yet. Upload a holdings file (and a trades file), then click <b>Save Permanently</b>
-       above.`
+  // GitHub success is checked first and wins regardless of disk: it's the
+  // more durable, shared store, so a save that reached GitHub but not the
+  // local disk is still a real, permanent save -- the old version only ever
+  // looked at diskOk, so that case wrongly showed "not saved" advice.
+  const statusMsg = (ghOk === true)
+    ? `<b style="color:var(--up)">✓ Last save committed to GitHub.</b> That's a durable, shared save --
+       it's there on any machine, with full history in the repo's commits.`
     : diskOk === true
     ? `<b style="color:var(--up)">✓ Last save reached book.sqlite on disk.</b> That's the file
        build_signals.py reads, so a new ticker gets prices from the next run.`
+    : diskOk === null && ghOk === null
+    ? `Not saved yet. Upload a holdings file (and a trades file), then click <b>Save Permanently</b>
+       above.`
+    : canEdit() && ghOk === false
+    ? `<b style="color:var(--down)">Last save did not reach GitHub${ghErr ? ": " + esc(ghErr) : ""}.</b>
+       ${diskOk ? "It did save to book.sqlite on disk." : "It's kept in this browser only for now."}`
     : !isLocalHost
     ? `<b style="color:var(--amber)">Disk save isn't available on this page.</b>
        This is a static hosted page -- there's no server here to write book.sqlite to, so that part
@@ -1274,11 +1285,21 @@ function handleFile(file, slot){
    apart over time. */
 async function persistState(commitMessage){
   const onDisk = await saveToServer();
-  if (onDisk) localStorage.removeItem(BOOK_KEY); else saveLocal();
+  // GitHub is tried BEFORE deciding on the browser fallback -- not after. The
+  // old order wrote a browser-only copy whenever disk failed even if the
+  // GitHub save right after it succeeded, which is exactly the redundant,
+  // confusing state a hosted page (disk always unavailable there) hits on
+  // every single save despite GitHub genuinely holding the real copy.
+  let ghSaved = false, ghError = null;
+  if (canEdit() && bookSha && !ghErr){
+    try{ await saveBook(commitMessage); ghSaved = true; }
+    catch(e){ ghError = e.message; }
+    ghOk = ghSaved;
+  }
+  if (onDisk || ghSaved) localStorage.removeItem(BOOK_KEY);   // a durable store has it
+  else saveLocal();                                            // neither did -- true last resort
   renderGh();
-  if (!canEdit() || !bookSha || ghErr) return { onDisk, ghSaved:false, ghError:null };
-  try{ await saveBook(commitMessage); return { onDisk, ghSaved:true, ghError:null }; }
-  catch(e){ return { onDisk, ghSaved:false, ghError:e.message }; }
+  return { onDisk, ghSaved, ghError };
 }
 async function commit(){
   if (!staged) return;

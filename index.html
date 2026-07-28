@@ -1032,7 +1032,8 @@ function renderGh(){
     : `<div class="ghstat" style="margin-bottom:12px">
          <b style="color:var(--up)">✓ Uploads save automatically to book.sqlite</b> and reload every
          time you open the dashboard. Nothing to set up. That's the file build_signals.py reads,
-         so a stock you add gets prices from tonight's run.</div>`;
+         so a stock you add gets prices from tonight's run.</div>
+       <div class="btnrow"><button class="act ghost" style="border-color:rgba(228,96,78,.5);color:var(--down)" onclick="deleteAllData()">Delete all data</button></div>`;
   const saved = localStorage.getItem(BOOK_KEY);
   if (saved){
     let d = {};
@@ -1240,48 +1241,68 @@ function handleFile(file, slot){
   };
   reader.readAsBinaryString(file);
 }
+/* Disk -> browser-fallback -> GitHub, in that order -- the same three-way
+   save every upload already went through, now shared with the delete action
+   below so both write through identical logic instead of two copies drifting
+   apart over time. */
+async function persistState(commitMessage){
+  const onDisk = await saveToServer();
+  if (onDisk) localStorage.removeItem(BOOK_KEY); else saveLocal();
+  renderGh();
+  if (!canEdit() || !bookSha || ghErr) return { onDisk, ghSaved:false, ghError:null };
+  try{ await saveBook(commitMessage); return { onDisk, ghSaved:true, ghError:null }; }
+  catch(e){ return { onDisk, ghSaved:false, ghError:e.message }; }
+}
 async function commit(){
   if (!staged) return;
   // Captured before state is overwritten: a trades-only upload leaves holdings
   // untouched, so this set matches the new one exactly and nothing "new" is
-  // ever found — the trigger below only ever fires for a genuinely new ticker.
+  // ever found -- the trigger below only ever fires for a genuinely new ticker.
   const prevTickers = new Set(state.holdings.map(h=>h.tk));
   state = staged; staged = null; renderAll(); showView("ov");
-  // Disk first — it's the copy build_signals.py reads. Falls back to the browser
-  // copy when the page isn't served by serve.py.
-  if (await saveToServer()) localStorage.removeItem(BOOK_KEY); else saveLocal();
-  renderGh();
-  const newTickers = state.holdings.map(h=>h.tk).filter(tk=>!prevTickers.has(tk));
   const msg = document.getElementById("msg");
-  // Not connected, or no sha read from the API: the browser/disk copy is as far
-  // as it goes. Saving without a sha would clobber the branch instead of failing
-  // on a stale write.
-  if (!canEdit() || !bookSha || ghErr){
-    if (newTickers.length){
-      msg.className = "msg ok";
-      msg.textContent = `Saved. New ticker(s) ${newTickers.join(", ")} will get prices at tonight's ` +
-        `scheduled run — connect GitHub above to trigger it immediately instead.`;
-    }
-    return;
-  }
-  try{
-    await saveBook(`bulk: replace book from ${state.srcH.replace(/^Holdings: /, "")}`);
-    renderAll();
-  }catch(e){
+  const r = await persistState(`bulk: replace book from ${state.srcH.replace(/^Holdings: /, "")}`);
+  if (r.ghError){
     msg.className = "msg err";
-    msg.textContent = "Loaded on screen, but the save failed: " + e.message +
-      " — nothing was committed.";
+    msg.textContent = `Loaded on screen, but the GitHub save failed: ${r.ghError} -- ` +
+      (r.onDisk ? "saved to book.sqlite on disk instead." : "saved to this browser only.");
     return;
   }
-  if (newTickers.length){
-    const res = await triggerNightlyRun();
-    msg.className = res.ok ? "msg ok" : "msg err";
-    msg.textContent = res.ok
-      ? `Saved. New ticker(s) ${newTickers.join(", ")} — price fetch triggered now, expect prices in a few minutes.`
-      : `Saved. New ticker(s) ${newTickers.join(", ")} — couldn't auto-trigger a price fetch (${res.reason}). ` +
-        `They'll be priced at tonight's scheduled run, or trigger it yourself: Actions → update-signals → Run workflow.`;
+  const newTickers = state.holdings.map(h=>h.tk).filter(tk=>!prevTickers.has(tk));
+  if (!newTickers.length) return;               // nothing new to report
+  if (!r.ghSaved){
+    msg.className = "msg ok";
+    msg.textContent = `Saved. New ticker(s) ${newTickers.join(", ")} will get prices at tonight's ` +
+      `scheduled run -- connect GitHub above to trigger it immediately instead.`;
+    return;
   }
+  const res = await triggerNightlyRun();
+  msg.className = res.ok ? "msg ok" : "msg err";
+  msg.textContent = res.ok
+    ? `Saved. New ticker(s) ${newTickers.join(", ")} -- price fetch triggered now, expect prices in a few minutes.`
+    : `Saved. New ticker(s) ${newTickers.join(", ")} -- couldn't auto-trigger a price fetch (${res.reason}). ` +
+      `They'll be priced at tonight's scheduled run, or trigger it yourself: Actions -> update-signals -> Run workflow.`;
 }
+async function deleteAllData(){
+  const n = state.holdings.length, m = state.trades.length;
+  if (!n && !m) return;                          // already empty, nothing to do
+  if (!confirm(`Delete all ${n} holdings and ${m} trades?\n\n` +
+               `This clears the live book back to empty. Anything already committed to Git history ` +
+               `(if connected) stays recoverable there -- this only clears what's live now.`)) return;
+  state = { holdings: [], trades: [], cash: 0,
+    srcH: "No holdings yet -- upload a holdings file (and a trades file) on the Import tab.",
+    srcT: "No trades recorded" };
+  renderAll(); showView("imp");
+  const r = await persistState(`delete all holdings and trades (${n} holdings, ${m} trades)`);
+  const msg = document.getElementById("msg");
+  msg.className = r.ghError ? "msg err" : "msg ok";
+  msg.textContent = r.ghError
+    ? `Cleared on screen, but the GitHub save failed: ${r.ghError} -- ` +
+      (r.onDisk ? "saved to book.sqlite on disk instead." : "saved to this browser only.")
+    : `Deleted. Book is empty${r.ghSaved ? " and committed to GitHub"
+        : r.onDisk ? " and saved to book.sqlite on disk" : " (saved to this browser only)"}.`;
+}
+
 function resetImport(){
   staged = null;
   document.getElementById("preview").style.display = "none";

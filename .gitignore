@@ -1,9 +1,9 @@
 __pycache__/
 .claude/settings.local.json
 
-# Import artifact, not a source of truth. book.json is generated from it and is
-# what the dashboard actually reads — keeping both in git guarantees they drift,
-# and a binary xlsx can't be diffed or reviewed in a PR.
+# Import artifact, not a source of truth. book.sqlite is what the dashboard
+# actually reads — keeping both in git guarantees they drift, and a binary
+# xlsx can't be diffed or reviewed in a PR.
 Holdings_File.xlsx
 
 # Throwaway fixtures from make_test_xlsx.py — regenerate, don't version.
@@ -15,3 +15,7 @@ Trades_File_TEST.xlsx
 
 # Excel lock files
 ~$*
+
+# serve.py writes book.sqlite through a temp file first; one can be orphaned
+# on disk if a save is interrupted mid-write.
+tmp*.sqlite

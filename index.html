@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
 <style>
 :root{
   --ink:#0E1420; --panel:#151D2C; --line:#25304A;
@@ -255,7 +256,7 @@ button.ghost{background:none;color:var(--saffron)}
     not touch the signal feed.<br>
     <b>Saving is automatic.</b> An upload replaces the whole book and is remembered, so it loads
     again every time you open the dashboard — no button to press, nothing to set up. Point it at
-    book.json as well and the nightly price job sees stocks you add; connect GitHub and the same
+    book.sqlite as well and the nightly price job sees stocks you add; connect GitHub and the same
     book follows you to another machine, as commits you can revert.
 </div>
 <script>
@@ -314,77 +315,134 @@ function applyFeed(j, srcTag){
   renderAll();
 }
 /* ================= BOOK (editable store) =================
-   book.json carries the human-owned data — weights, targets, add levels,
-   conviction, thesis, strategy, cash, trades. signals.json carries machine data
-   (price, mcap, z-scores) and is never hand-edited. Same fetch pattern as
-   loadSignals: fetch, validate, render; a failure leaves a visible reason. */
-let state = { holdings: [], trades: [], cash: 0, srcH: "loading book.json\u2026", srcT: "" };
+   book.sqlite carries the human-owned data -- weights, targets, add levels,
+   conviction, thesis, strategy, cash, trades -- as an actual SQLite database
+   (via sql.js, SQLite compiled to WASM: no server, the whole engine runs in
+   this tab). signals.json carries machine data (price, mcap, z-scores) and
+   stays plain JSON -- it's fetched fresh nightly, never hand-edited, and
+   nothing about it needed a database. */
+let state = { holdings: [], trades: [], cash: 0, srcH: "loading book.sqlite...", srcT: "" };
+
+let SQL = null, sqlReady = null;
+function initSql(){
+  return sqlReady ??= initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` })
+    .then(m => SQL = m);
+}
+const SCHEMA = `
+  CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE holdings(tk TEXT PRIMARY KEY, co TEXT, sector TEXT, industry TEXT, analyst TEXT,
+    wt REAL, fullWt REAL, tp REAL, addLvl REAL, yfSymbol TEXT, conv TEXT, thesis TEXT, strategy TEXT);
+  CREATE TABLE trades(id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, tk TEXT, side TEXT,
+    qty REAL, price REAL, costs REAL);`;
+// sql.js returns [{columns, values}] per statement; flatten to plain row objects
+// once here so every caller works with the same shape the rest of the app used
+// when this was JSON.
+function dbRows(db, sql){
+  const r = db.exec(sql);
+  if (!r.length) return [];
+  const { columns, values } = r[0];
+  return values.map(v => Object.fromEntries(columns.map((c,i) => [c, v[i]])));
+}
+function dbFromState(){
+  const db = new SQL.Database();
+  db.run(SCHEMA);
+  const meta = db.prepare("INSERT INTO meta VALUES (?,?)");
+  meta.run(["updated", new Date().toISOString().slice(0,10)]);
+  meta.run(["source", state.srcH.replace(/^Holdings: /, "")]);
+  meta.run(["cash", String(state.cash)]);
+  meta.free();
+  const h = db.prepare("INSERT INTO holdings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  for (const x of state.holdings)
+    h.run([x.tk, x.co, x.sector, x.industry, x.analyst, x.wt, x.fullWt, x.tp, x.addLvl,
+           x.yfSymbol, x.conv, x.thesis, x.strategy].map(v => v === undefined ? null : v));
+  h.free();
+  const t = db.prepare("INSERT INTO trades(date,tk,side,qty,price,costs) VALUES (?,?,?,?,?,?)");
+  for (const x of state.trades)
+    t.run([x.date instanceof Date ? x.date.toISOString() : x.date, x.tk, x.side, x.qty, x.price, x.costs]);
+  t.free();
+  return db;
+}
+function bookBytes(){ const db = dbFromState(); const bytes = db.export(); db.close(); return bytes; }
+function stateFromDb(bytes){
+  const db = new SQL.Database(bytes);
+  const meta = Object.fromEntries(dbRows(db, "SELECT key,value FROM meta").map(r => [r.key, r.value]));
+  const holdings = dbRows(db, "SELECT * FROM holdings");
+  const trades = dbRows(db, "SELECT * FROM trades").map(t => ({...t, date: asDate(t.date)}));
+  db.close();
+  return { holdings, trades, cash: parseFloat(meta.cash) || 0, source: meta.source, updated: meta.updated };
+}
+// btoa/atob only handle strings, not bytes -- these are the binary-safe pair,
+// distinct from the text b64enc/b64dec still used for signals.json below.
+const b64encBytes = bytes => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(""));
+const b64decBytes = s => Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0));
+
 /* Three ways an upload can be made to stick, best first:
-     1. written to book.json on disk (Chrome/Edge File System Access API) —
-        the only one build_signals.py can see, so new tickers get prices;
-     2. kept in this browser (localStorage) — no setup, but invisible to the
-        nightly job and lost with the browser profile;
-     3. GitHub, if connected — shared truth, wins on read.
-   Load order: GitHub > browser copy > book.json on disk. The browser copy is
+     1. written to book.sqlite on disk (via serve.py's POST route) -- the only
+        copy build_signals.py can see, so new tickers get prices;
+     2. kept in this browser (localStorage, base64) -- no setup, but invisible
+        to the nightly job and lost with the browser profile;
+     3. GitHub, if connected -- shared truth, wins on read.
+   Load order: GitHub > browser copy > book.sqlite on disk. The browser copy is
    deliberately cleared once disk writing works, so there is one truth again. */
 const BOOK_KEY = "dl_book";
-const saveLocal = () => { try{ localStorage.setItem(BOOK_KEY, bookJSON()); }catch(e){} };
+const saveLocal = () => { try{ localStorage.setItem(BOOK_KEY, b64encBytes(bookBytes())); }catch(e){} };
 function clearLocal(){ localStorage.removeItem(BOOK_KEY); loadBook(); }
 
-/* serve.py accepts a POST and writes book.json for us. That's the only copy
+/* serve.py accepts a POST and writes book.sqlite for us. That's the only copy
    build_signals.py reads, so a stock added through Import gets prices the same
-   night — with no picker, no permission prompt and no browser restrictions.
+   night -- with no picker, no permission prompt and no browser restrictions.
    Returns false when the page isn't being served by serve.py, and the caller
    falls back to the browser copy. */
 let diskOk = null;                        // null = not tried yet, for the panel
 async function saveToServer(){
   try{
-    const r = await fetch("book.json", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: bookJSON() });
+    const r = await fetch("book.sqlite", { method: "POST",
+      headers: { "Content-Type": "application/octet-stream" }, body: bookBytes() });
     diskOk = r.ok;
   }catch(e){ diskOk = false; }
   return diskOk;
 }
 
 async function loadBook(){
-  let j = null, from = "book.json";
+  await initSql();
+  let j = null, from = "book.sqlite";
   ghErr = ""; bookSha = null;
   // Connected: read through the API. It hands back the sha the next save needs,
-  // and it's authoritative \u2014 a CDN can serve a stale book.json for minutes after
-  // a commit, which reads as "my edit didn't save".
+  // and it's authoritative -- a CDN can serve a stale book.sqlite for minutes
+  // after a commit, which reads as "my edit didn't save".
   if (canEdit()){
-    try{ const g = await ghFetch("GET"); j = JSON.parse(b64dec(g.content)); bookSha = g.sha;
+    try{ const g = await ghFetch("GET"); j = stateFromDb(b64decBytes(g.content)); bookSha = g.sha;
          from = "GitHub"; }
     catch(e){ ghErr = e.message; }        // fall through to the published copy, read-only
   }
   if (!j){
     const saved = localStorage.getItem(BOOK_KEY);
     if (saved){
-      try{ j = JSON.parse(saved); from = "saved in this browser"; }
+      try{ j = stateFromDb(b64decBytes(saved)); from = "saved in this browser"; }
       catch(e){ localStorage.removeItem(BOOK_KEY); }   // corrupt: don't wedge the app
     }
   }
   if (!j){
     try{
-      const r = await fetch("book.json", {cache:"no-store"});
+      const r = await fetch("book.sqlite", {cache:"no-store"});
       if (!r.ok) throw new Error("HTTP " + r.status);
-      j = await r.json();
+      j = stateFromDb(new Uint8Array(await r.arrayBuffer()));
     }catch(e){
       state = { holdings: [], trades: [], cash: 0,
-        srcH: `book.json not loaded \u2014 ${e.message}`,
-        srcT: "serve the folder over http (python -m http.server), not file://" };
+        srcH: `book.sqlite not loaded -- ${e.message}`,
+        srcT: "serve the folder with start_dashboard.bat, not file://" };
       renderAll(); return;
     }
   }
-  if (!j.holdings || !j.holdings.length){
-    state = { holdings: [], trades: [], cash: 0,
-      srcH: "book.json has no holdings", srcT: "" };
-    renderAll(); return;
-  }
-  const trades = (j.trades || []).map(t => ({...t, date: asDate(t.date)}));
-  const label = j.source && from !== "book.json" ? `${j.source} \u00b7 ${from}` : from;
-  state = { holdings: j.holdings, trades, cash: j.cash ?? 0,
-    srcH: `Holdings: ${label} \u00b7 ${j.holdings.length} names${j.updated ? " \u00b7 " + j.updated : ""}`,
+  // Zero holdings is a real, expected state now -- a fresh database before
+  // anyone has uploaded a holdings file -- not a load failure, so it renders
+  // the same empty dashboard rather than an error screen.
+  const trades = j.trades || [];
+  const label = j.source && from !== "book.sqlite" ? `${j.source} - ${from}` : from;
+  state = { holdings: j.holdings || [], trades, cash: j.cash ?? 0,
+    srcH: j.holdings?.length
+      ? `Holdings: ${label} - ${j.holdings.length} names${j.updated ? " - " + j.updated : ""}`
+      : "No holdings yet -- upload a holdings file (and a trades file) on the Import tab.",
     srcT: trades.length ? `Trades: ${trades.length}` : "No trades recorded" };
   renderAll(); renderGh();
 }
@@ -906,7 +964,7 @@ function renderPerformance(){
 }
 function renderAll(){ renderOverview(); renderExposures(); renderRisk(); renderPerformance(); renderPositions(); }
 /* ================= EDIT: GitHub-backed writes =================
-   book.json is the store and the GitHub Contents API is the write path — no
+   book.sqlite is the store and the GitHub Contents API is the write path — no
    server, and every save is a commit, so history, blame and revert come free.
    A fine-grained PAT lives in this browser's localStorage; no token means the
    dashboard is read-only, which is the correct default for viewers. */
@@ -921,7 +979,7 @@ const b64enc = s => { let o = "";
 const b64dec = s => new TextDecoder().decode(
   Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0)));
 
-async function ghFetch(method, body, path = "book.json"){
+async function ghFetch(method, body, path = "book.sqlite"){
   const url = `https://api.github.com/repos/${gh.repo}/contents/${path}` +
     (method === "GET" ? `?ref=${encodeURIComponent(gh.branch || "main")}` : "");
   const r = await fetch(url, { method,
@@ -955,13 +1013,8 @@ async function triggerNightlyRun(){
       : (j.message || `GitHub ${r.status}`) };
   }catch(e){ return { ok:false, reason: e.message }; }
 }
-const bookJSON = () => JSON.stringify({
-  updated: new Date().toISOString().slice(0,10),
-  source: state.srcH.replace(/^Holdings: /, ""),
-  cash: state.cash, holdings: state.holdings, trades: state.trades }, null, 1);
-
 async function saveBook(message){
-  const j = await ghFetch("PUT", { message, content: b64enc(bookJSON()),
+  const j = await ghFetch("PUT", { message, content: b64encBytes(bookBytes()),
                                    sha: bookSha, branch: gh.branch || "main" });
   bookSha = j.content.sha;
 }
@@ -974,23 +1027,23 @@ function renderGh(){
   let head = diskOk === false
     ? `<div class="ghstat" style="margin-bottom:12px">
          <b style="color:var(--amber)">Uploads are saved in this browser only.</b>
-         book.json on disk isn't being written, so the nightly price job won't see stocks you add.
+         book.sqlite on disk isn't being written, so the nightly price job won't see stocks you add.
          Start the dashboard with <b>start_dashboard.bat</b> to fix that.</div>`
     : `<div class="ghstat" style="margin-bottom:12px">
-         <b style="color:var(--up)">✓ Uploads save automatically to book.json</b> and reload every
+         <b style="color:var(--up)">✓ Uploads save automatically to book.sqlite</b> and reload every
          time you open the dashboard. Nothing to set up. That's the file build_signals.py reads,
          so a stock you add gets prices from tonight's run.</div>`;
   const saved = localStorage.getItem(BOOK_KEY);
   if (saved){
     let d = {};
-    try{ d = JSON.parse(saved); }catch(e){}
+    try{ d = stateFromDb(b64decBytes(saved)); }catch(e){}
     head += `<div class="ghstat" style="margin-bottom:12px">
         Saved copy in this browser: <b>${esc(d.source || "uploaded file")}</b> ·
         ${(d.holdings||[]).length} names · ${(d.trades||[]).length} trades${d.updated ? " · " + esc(d.updated) : ""}.
         It loads automatically every time you open the dashboard.
         <button class="act ghost" style="${mini}"
-          onclick="if(confirm('Discard the saved upload and go back to the book.json in this folder?')) clearLocal()"
-          >Reset to book.json</button></div>`;
+          onclick="if(confirm('Discard the saved upload and go back to the book.sqlite in this folder?')) clearLocal()"
+          >Reset to book.sqlite</button></div>`;
   }
   el.innerHTML = head + (canEdit()
     ? `<div class="ghstat">Connected to <b>${esc(gh.repo)}</b> on branch <b>${esc(gh.branch || "main")}</b>.
@@ -1029,7 +1082,7 @@ async function ghConnect(){
     await loadBook();                            // reload via the API to pick up the sha
     loadSignals();                               // and pull tonight's prices from GitHub too
     renderGh();
-  }catch(e){ gh = null; ghNote("Could not read book.json — " + e.message); }
+  }catch(e){ gh = null; ghNote("Could not read book.sqlite — " + e.message); }
 }
 function ghDisconnect(){
   localStorage.removeItem(GH_KEY);

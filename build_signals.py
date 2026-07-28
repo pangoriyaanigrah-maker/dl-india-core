@@ -2,30 +2,31 @@
 
 Writes signals.json: last price, market cap (Rs crore), 52-week low, and
 cross-sectional value / momentum / quality z-scores for every ticker in
-book.json — plus a market-cap-weighted sector and size benchmark computed
+book.sqlite — plus a market-cap-weighted sector and size benchmark computed
 across the Nifty Smallcap 250 + Microcap 250 (see BENCH_INDICES).
 
-Division of labour: book.json is human-owned (weights, targets, theses) and is
-only ever READ here. signals.json is machine-owned and only ever WRITTEN here.
-Nothing in this script may edit the book.
+Division of labour: book.sqlite is human-owned (weights, targets, theses) and
+is only ever READ here. signals.json is machine-owned and only ever WRITTEN
+here. Nothing in this script may edit the book.
 
     python build_signals.py              # fetch and write signals.json
     python build_signals.py --selftest   # check the maths, no network
 
 Tickers that Yahoo can't resolve land in signals.json's "errors" and simply
 show as NO FEED on the dashboard. Fix one by adding a "yfSymbol" to that
-holding in book.json — e.g. "yfSymbol": "MACFOS.NS".
+holding (the dashboard's Import tab writes this straight into book.sqlite).
 """
 import csv
 import io
 import json
 import math
+import sqlite3
 import sys
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-BOOK = "book.json"
+BOOK = "book.sqlite"
 OUT = "signals.json"
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -163,14 +164,19 @@ def beta(close_df, sym, index_sym):
 # ---------------------------------------------------------------- io
 def load_book():
     try:
-        with open(BOOK, encoding="utf-8") as f:
-            holdings = json.load(f)["holdings"]
-    except FileNotFoundError:
-        sys.exit(f"{BOOK} not found — upload a holdings file on the dashboard's Import tab.")
-    except (KeyError, json.JSONDecodeError) as e:
-        sys.exit(f"{BOOK} is not a valid book: {e}")
+        con = sqlite3.connect(f"file:{BOOK}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        holdings = [dict(r) for r in con.execute("SELECT * FROM holdings")]
+        con.close()
+    except sqlite3.OperationalError as e:
+        sys.exit(f"{BOOK} not found or not a valid book database ({e}) — "
+                  f"upload a holdings file on the dashboard's Import tab.")
     if not holdings:
-        sys.exit(f"{BOOK} has no holdings.")
+        # A freshly-created, still-empty book is a real state now (before
+        # anyone has uploaded anything) — nothing to fetch prices for yet,
+        # but not a corrupt file either, so this is informational, not fatal.
+        sys.exit(f"{BOOK} has no holdings yet — upload a holdings file on the "
+                 f"dashboard's Import tab, then re-run.")
     return holdings
 
 
@@ -265,7 +271,7 @@ def build():
             resolved[tk] = hit
         else:
             errors.append(f"{tk}: no Yahoo data for {' or '.join(cands)} — "
-                          f"set \"yfSymbol\" on this holding in book.json")
+                          f"set a Yahoo symbol for this holding on the dashboard's Import tab")
 
     # Score across the union of universe and holdings, so a portfolio name is
     # part of the cross-section rather than measured against a book it's absent from.

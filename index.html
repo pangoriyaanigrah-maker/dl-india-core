@@ -394,7 +394,13 @@ function clearLocal(){ localStorage.removeItem(BOOK_KEY); loadBook(); }
    Returns false when the page isn't being served by serve.py, and the caller
    falls back to the browser copy. */
 let diskOk = null;                        // null = not tried yet, for the panel
+// A static host (GitHub Pages, a custom domain, ...) can never run serve.py,
+// so the POST below would always fail there anyway -- skip the round trip
+// entirely and let the panel say so accurately, instead of "not tried yet"
+// silently turning into a failed network request every single save.
+const isLocalHost = ["localhost", "127.0.0.1"].includes(location.hostname);
 async function saveToServer(){
+  if (!isLocalHost){ diskOk = false; return false; }
   try{
     const r = await fetch("book.sqlite", { method: "POST",
       headers: { "Content-Type": "application/octet-stream" }, body: bookBytes() });
@@ -1024,16 +1030,26 @@ function renderGh(){
   const el = document.getElementById("ghpanel");
   if (!el) return;
   const mini = "font-size:11px;padding:3px 10px;margin-left:8px";
-  let head = diskOk === false
-    ? `<div class="ghstat" style="margin-bottom:12px">
-         <b style="color:var(--amber)">Uploads are saved in this browser only.</b>
-         book.sqlite on disk isn't being written, so the nightly price job won't see stocks you add.
-         Start the dashboard with <b>start_dashboard.bat</b> to fix that.</div>`
-    : `<div class="ghstat" style="margin-bottom:12px">
-         <b style="color:var(--up)">✓ Uploads save automatically to book.sqlite</b> and reload every
-         time you open the dashboard. Nothing to set up. That's the file build_signals.py reads,
-         so a stock you add gets prices from tonight's run.</div>
-       <div class="btnrow"><button class="act ghost" style="border-color:rgba(228,96,78,.5);color:var(--down)" onclick="deleteAllData()">Delete all data</button></div>`;
+  // Three distinct situations, not two: writing to disk actually failed (only
+  // possible when running locally), can never work here because this is a
+  // static host with no server to write to (expected, not an error), or it's
+  // genuinely working. A static host was previously told to run
+  // start_dashboard.bat, which is local-only advice that makes no sense there.
+  const statusMsg = diskOk !== false
+    ? `<b style="color:var(--up)">✓ Uploads save automatically to book.sqlite</b> and reload every
+       time you open the dashboard. Nothing to set up. That's the file build_signals.py reads,
+       so a stock you add gets prices from tonight's run.`
+    : !isLocalHost
+    ? `<b style="color:var(--amber)">Uploads save to GitHub (if connected below) or this browser only.</b>
+       This is a static hosted page -- there's no server here to write book.sqlite to disk, so that
+       part is never available on this link. Connect GitHub for a save that survives across visits
+       and machines; otherwise it's remembered in this browser only.`
+    : `<b style="color:var(--amber)">Uploads are saved in this browser only.</b>
+       book.sqlite on disk isn't being written, so the nightly price job won't see stocks you add.
+       Start the dashboard with <b>start_dashboard.bat</b> to fix that.`;
+  let head = `<div class="ghstat" style="margin-bottom:12px">${statusMsg}</div>
+    <div class="btnrow"><button class="act ghost" style="border-color:rgba(228,96,78,.5);color:var(--down)"
+      onclick="deleteAllData()">Delete all data</button></div>`;
   const saved = localStorage.getItem(BOOK_KEY);
   if (saved){
     let d = {};

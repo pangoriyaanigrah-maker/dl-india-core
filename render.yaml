@@ -1,0 +1,33 @@
+# Render blueprint. Connect this repo at dashboard.render.com/blueprints and
+# Render reads this file -- no CLI, no local login.
+#
+# Two secrets have to be pasted into the Render dashboard by hand
+# (sync: false means "prompt me, don't store it in git"):
+#
+#   GOOGLE_SERVICE_ACCOUNT_JSON   the whole service-account.json, one line
+#   DRIVE_FOLDER_ID               the Portfolio folder id
+#
+# The free plan sleeps after ~15 minutes idle, so the first request after a
+# quiet spell takes ~50s to wake. Fine for a personal dashboard; the paid
+# tier removes it.
+services:
+  - type: web
+    name: dl-india-core-api
+    runtime: python
+    plan: free
+    region: singapore          # closest to NSE data and to you
+    branch: master
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: DRIVE_FOLDER_ID
+        sync: false
+      - key: CORS_ORIGINS
+        # Set to your Vercel URL once the frontend is deployed. Left as *
+        # the API is readable by anyone who finds it -- there is no auth.
+        value: "*"

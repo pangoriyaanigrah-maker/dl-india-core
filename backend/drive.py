@@ -130,9 +130,22 @@ class DriveStore:
             log.info("created Drive folder %s", FOLDER_NAME)
         log.info("storage: Google Drive folder %s (%s)", FOLDER_NAME, self.folder_id)
 
+    def prime(self):
+        """One listing instead of one query per file. Startup used to make
+        six round trips before serving anything, which on a serverless host
+        is paid again on every cold start."""
+        self._ids = {f["name"]: f["id"]
+                     for f in self._q(q=f"'{self.folder_id}' in parents and trashed=false")}
+        self._primed = True
+        return set(self._ids)
+
     def _file_id(self, name, refresh=False):
         if not refresh and name in self._ids:
             return self._ids[name]
+        # After prime(), a name that is absent from the cache is absent from
+        # the folder -- no point asking Drive again.
+        if not refresh and getattr(self, "_primed", False):
+            return None
         found = self._q(q=f"name='{name}' and '{self.folder_id}' in parents and trashed=false")
         if not found:
             self._ids.pop(name, None)
@@ -142,6 +155,8 @@ class DriveStore:
 
     # -- the four operations -----------------------------------------
     def exists(self, name):
+        if getattr(self, "_primed", False):
+            return name in self._ids
         return self._file_id(name, refresh=True) is not None
 
     def read_bytes(self, name):
@@ -254,6 +269,7 @@ def connect():
             )
         _store = DriveStore(creds)
         _store.ensure_folder()
+        _store.prime()          # one listing, not one query per file
 
     missing = [n for n in JSON_FILES if not _store.exists(n)]
     for name in missing:

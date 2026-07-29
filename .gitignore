@@ -1,39 +1,20 @@
 __pycache__/
-.claude/settings.local.json
-
-# Import artifact, not a source of truth. book.sqlite is what the dashboard
-# actually reads — keeping both in git guarantees they drift, and a binary
-# xlsx can't be diffed or reviewed in a PR.
-Holdings_File.xlsx
-
-# Throwaway fixtures from make_test_xlsx.py — regenerate, don't version.
-Holdings_File_TEST.xlsx
-Trades_File_TEST.xlsx
-
-# One-off ad hoc demo files, not a reusable fixture.
-Demo_*.xlsx
-
-# Editor config; start_dashboard.bat is the supported way to run this.
-.claude/
-
-# Excel lock files
+.pytest_cache/
 ~$*
 
-# serve.py writes book.sqlite through a temp file first; one can be orphaned
-# on disk if a save is interrupted mid-write.
-tmp*.sqlite
-
-# No database any more -- Google Drive is the only storage.
-.pytest_cache/
-
-# Service account key. NEVER commit this.
+# Service account key and env. NEVER commit these.
 service-account.json
 backend/service-account.json
 .env
 
-# Local storage backend (DRIVE_LOCAL_DIR) and its Portfolio folder.
-drive_local/
+# Your Excel files. The book lives on Google Drive; these are the inputs
+# you upload, and a binary xlsx can't be diffed or reviewed anyway.
+*.xlsx
 
-# One-off starter files for the Drive folder; regenerate with
-# backend/make_starter_files.py.
+# Local storage backend (DRIVE_LOCAL_DIR), and the one-off starter files
+# from backend/make_starter_files.py.
+drive_local/
 drive_starter/
+
+# Editor config
+.claude/

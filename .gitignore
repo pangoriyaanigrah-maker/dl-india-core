@@ -22,3 +22,18 @@ Demo_*.xlsx
 # serve.py writes book.sqlite through a temp file first; one can be orphaned
 # on disk if a save is interrupted mid-write.
 tmp*.sqlite
+
+# No database any more -- Google Drive is the only storage.
+.pytest_cache/
+
+# Service account key. NEVER commit this.
+service-account.json
+backend/service-account.json
+.env
+
+# Local storage backend (DRIVE_LOCAL_DIR) and its Portfolio folder.
+drive_local/
+
+# One-off starter files for the Drive folder; regenerate with
+# backend/make_starter_files.py.
+drive_starter/

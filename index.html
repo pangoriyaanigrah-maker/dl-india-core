@@ -6,8 +6,6 @@
 <title>DL India Core — CIO Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
 <style>
 :root{
   --ink:#0E1420; --panel:#151D2C; --line:#25304A;
@@ -175,6 +173,21 @@ button.ghost{background:none;color:var(--saffron)}
   margin-top:14px;line-height:1.7;display:none}
 .notice.on{display:block}
 .notice.bad{color:var(--down);background:rgba(228,96,78,.1);border:1px solid rgba(228,96,78,.35)}
+/* ---------- history charts ---------- */
+.chart{width:100%;height:auto;display:block;overflow:visible}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .axlbl{font-family:'IBM Plex Mono';font-size:9px;fill:var(--faint)}
+.chart .line{fill:none;stroke:var(--saffron);stroke-width:2}
+.chart .area{fill:var(--saffron);opacity:.10}
+.chart .dot{fill:var(--saffron)}
+.hint{font-family:'IBM Plex Mono';font-size:11px;color:var(--faint);line-height:1.8;margin-top:8px}
+/* Backend status banner: hidden entirely unless loading or errored, so the
+   healthy page looks exactly as it did before. */
+#apibanner{font-family:'IBM Plex Mono';font-size:12px;line-height:1.7;padding:10px 14px;
+  border-radius:8px;margin:14px 0 0;display:none}
+#apibanner.on{display:block}
+#apibanner.err{color:var(--down);background:rgba(228,96,78,.1);border:1px solid rgba(228,96,78,.35)}
+#apibanner.busy{color:var(--dim);background:var(--panel);border:1px solid var(--line)}
 @media (max-width:760px){
   .fgrid{grid-template-columns:1fr}
   .attr-grid{grid-template-columns:1fr}
@@ -205,8 +218,10 @@ button.ghost{background:none;color:var(--saffron)}
   <button class="tab" id="t-risk" onclick="showView('risk')">Risk</button>
   <button class="tab" id="t-perf" onclick="showView('perf')">Performance</button>
   <button class="tab" id="t-posn" onclick="showView('posn')">Positions</button>
+  <button class="tab" id="t-hist" onclick="showView('hist')">History</button>
   <button class="tab" id="t-imp" onclick="showView('imp')">Import</button>
 </div>
+<div id="apibanner"></div>
 <div class="view active" id="v-ov"><div id="ov-body"></div></div>
 <div class="view" id="v-exp"><div id="exp-body"></div></div>
 <div class="view" id="v-risk"><div id="risk-body"></div></div>
@@ -218,6 +233,7 @@ button.ghost{background:none;color:var(--saffron)}
   <div id="rows"></div>
   <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs the index constituents named on the Exposures tab, fetched from NSE nightly.</div>
 </div>
+<div class="view" id="v-hist"><div id="hist-body"></div></div>
 <div class="view" id="v-imp">
   <div class="drops">
     <div class="drop" id="drop-h" onclick="pick('h')">
@@ -232,22 +248,13 @@ button.ghost{background:none;color:var(--saffron)}
   <input type="file" id="file-h" accept=".xlsx,.csv" style="display:none">
   <input type="file" id="file-t" accept=".xlsx,.csv" style="display:none">
   <div class="msg" id="msg"></div>
-  <div id="preview">
-    <div class="sec" style="margin-top:22px">Preview <small id="pcount"></small></div>
-    <div class="twrap"><table class="ptable">
-      <thead><tr id="phead"></tr></thead>
-      <tbody id="pbody"></tbody>
-    </table></div>
-    <div class="btnrow">
-      <button class="act" onclick="commit()">Load</button>
-      <button class="act ghost" onclick="resetImport()">Clear</button>
-    </div>
-  </div>
+  <div id="preview"></div>
   <div class="sec" style="margin-top:26px">Save permanently <small>nothing is written until you click this</small></div>
   <div class="panel" style="margin-bottom:18px">
-    Loading a file only shows it on screen and can be reviewed across every tab first. Upload the
-    holdings file, then the trades file (or either alone), check the numbers, then save both together.
-    <div class="btnrow"><button class="act" onclick="savePermanently()">Save Permanently</button></div>
+    Picking a file does not upload it. Choose the holdings file, the trades file, or both, then click
+    below: the backend validates, imports and reports exactly what changed.
+    <div class="btnrow"><button class="act" onclick="savePermanently()">Save Permanently</button>
+      <button class="act ghost" onclick="resetImport()">Clear</button></div>
   </div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
@@ -259,282 +266,112 @@ button.ghost{background:none;color:var(--saffron)}
     benchmark index (NSE's own list, re-fetched each run), and writes
     signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
     not touch the signal feed.<br>
-    <b>Saving is manual, on purpose.</b> Load shows a file on screen without writing anything;
-    <b>Save Permanently</b> is the one action that commits it to disk and, if connected, to GitHub —
-    with a confirmation naming exactly what's about to be saved. There is deliberately no delete
-    button in the app; see reset_book.py in the repo for how to wipe the book, run by hand, outside
-    the dashboard.
+    <b>Saving is manual, on purpose.</b> Picking a file writes nothing;
+    <b>Save Permanently</b> is the one action that uploads it — with a confirmation naming exactly
+    what's about to happen. There is deliberately no delete
+    button in the app; delete the files in the Google Drive folder directly to wipe the book.
 </div>
 <script>
-/* ================= DATA ================= */
-/* Static fallback only — used when the nightly feed doesn't carry a live
-   bench_sect/bench_size (e.g. old feed version, or mcap fetch failed). */
-const BENCH_SECT_FALLBACK = { "Financials":0.30, "IT Services":0.12, "Consumer Discretionary":0.10, "Industrials":0.09,
-  "Energy":0.09, "Consumer Staples":0.07, "Materials":0.07, "Healthcare":0.06, "Autos":0.05,
-  "Telecom":0.03, "Utilities":0.02 };
-const CUTS = { large:67000, mid:22000 };
-const BENCH_SIZE_FALLBACK = {Large:.72, Mid:.18, Small:.10};
-let BENCH_SECT = BENCH_SECT_FALLBACK;
-let BENCH_SIZE = BENCH_SIZE_FALLBACK;
-let benchLive = false; // true once a live bench_sect/bench_size arrives from the feed
-/* ===== LIVE SIGNAL FEED =====
-   Nightly builder (build_signals.py, GitHub Actions cron) writes signals.json.
-   No fabricated prices ship in this file: until that script runs, every row
-   reads "NO FEED", which the app already renders gracefully. */
-let SIGNALS = {};
-let feedMeta = { live:false, asof:"no signal feed loaded yet — run build_signals.py" };
-let benchName = "the index";   // replaced by signals.json's "index" on load
-async function loadSignals(){
-  // Connected: the GitHub copy is the truth — the Actions cron commits fresh
-  // prices there nightly, while the copy on local disk only moves on git pull.
-  if (canEdit()){
-    try{
-      const g = await ghFetch("GET", null, "signals.json");
-      applyFeed(JSON.parse(b64dec(g.content)), " · via GitHub");
-      return;
-    }catch(e){ /* fall through to the local copy */ }
-  }
-  try{
-    const r = await fetch("signals.json", {cache:"no-store"});
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    applyFeed(await r.json(), "");
-    return;
-  }catch(e){ /* fall through to the no-feed state */ }
-  feedMeta = { live:false, asof:"no signal feed loaded yet — run build_signals.py (or feed unreachable)" };
-  BENCH_SECT = BENCH_SECT_FALLBACK; BENCH_SIZE = BENCH_SIZE_FALLBACK; benchLive = false;
-  renderAll();
-}
-function applyFeed(j, srcTag){
-  if (!j.signals || !Object.keys(j.signals).length) throw new Error("empty feed");
-  SIGNALS = j.signals;
-  feedMeta = { live:true, asof:(j.asof || "unknown") + srcTag, note:j.note || "" };
-  benchName = j.index || "the index";
-  // Live sector/size benchmark: only swap in if the feed actually carries
-  // non-empty maps — an old feed version or a failed mcap fetch omits
-  // these keys, and we keep the static fallback rather than blank charts.
-  if (j.bench_sect && Object.keys(j.bench_sect).length){
-    BENCH_SECT = j.bench_sect; benchLive = true;
-  } else { BENCH_SECT = BENCH_SECT_FALLBACK; benchLive = false; }
-  if (j.bench_size && Object.keys(j.bench_size).length){
-    BENCH_SIZE = j.bench_size;
-  } else { BENCH_SIZE = BENCH_SIZE_FALLBACK; }
-  renderAll();
-}
-/* ================= BOOK (editable store) =================
-   book.sqlite carries the human-owned data -- weights, targets, add levels,
-   conviction, thesis, strategy, cash, trades -- as an actual SQLite database
-   (via sql.js, SQLite compiled to WASM: no server, the whole engine runs in
-   this tab). signals.json carries machine data (price, mcap, z-scores) and
-   stays plain JSON -- it's fetched fresh nightly, never hand-edited, and
-   nothing about it needed a database. */
-let state = { holdings: [], trades: [], cash: 0, srcH: "loading book.sqlite...", srcT: "" };
+/* ================= BACKEND LOCATION =================
+   The dashboard is deployed to Vercel and the API lives elsewhere, so the
+   two are different origins. Set window.API_BASE before this script (or
+   edit the fallback) to point at the backend; leaving it empty means
+   same-origin, which is what a local `uvicorn main:app` gives you. */
+const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 
-let SQL = null, sqlReady = null;
-function initSql(){
-  return sqlReady ??= initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` })
-    .then(m => SQL = m);
-}
-const SCHEMA = `
-  CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
-  CREATE TABLE holdings(tk TEXT PRIMARY KEY, co TEXT, sector TEXT, industry TEXT, analyst TEXT,
-    wt REAL, fullWt REAL, tp REAL, addLvl REAL, yfSymbol TEXT, conv TEXT, thesis TEXT, strategy TEXT);
-  CREATE TABLE trades(id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, tk TEXT, side TEXT,
-    qty REAL, price REAL, costs REAL);`;
-// sql.js returns [{columns, values}] per statement; flatten to plain row objects
-// once here so every caller works with the same shape the rest of the app used
-// when this was JSON.
-function dbRows(db, sql){
-  const r = db.exec(sql);
-  if (!r.length) return [];
-  const { columns, values } = r[0];
-  return values.map(v => Object.fromEntries(columns.map((c,i) => [c, v[i]])));
-}
-function dbFromState(){
-  const db = new SQL.Database();
-  db.run(SCHEMA);
-  const meta = db.prepare("INSERT INTO meta VALUES (?,?)");
-  meta.run(["updated", new Date().toISOString().slice(0,10)]);
-  meta.run(["source", state.srcH.replace(/^Holdings: /, "")]);
-  meta.run(["cash", String(state.cash)]);
-  meta.free();
-  const h = db.prepare("INSERT INTO holdings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
-  for (const x of state.holdings)
-    h.run([x.tk, x.co, x.sector, x.industry, x.analyst, x.wt, x.fullWt, x.tp, x.addLvl,
-           x.yfSymbol, x.conv, x.thesis, x.strategy].map(v => v === undefined ? null : v));
-  h.free();
-  const t = db.prepare("INSERT INTO trades(date,tk,side,qty,price,costs) VALUES (?,?,?,?,?,?)");
-  for (const x of state.trades)
-    t.run([x.date instanceof Date ? x.date.toISOString() : x.date, x.tk, x.side, x.qty, x.price, x.costs]);
-  t.free();
-  return db;
-}
-function bookBytes(){ const db = dbFromState(); const bytes = db.export(); db.close(); return bytes; }
-function stateFromDb(bytes){
-  const db = new SQL.Database(bytes);
-  const meta = Object.fromEntries(dbRows(db, "SELECT key,value FROM meta").map(r => [r.key, r.value]));
-  const holdings = dbRows(db, "SELECT * FROM holdings");
-  const trades = dbRows(db, "SELECT * FROM trades").map(t => ({...t, date: asDate(t.date)}));
-  db.close();
-  return { holdings, trades, cash: parseFloat(meta.cash) || 0, source: meta.source, updated: meta.updated };
-}
-// btoa/atob only handle strings, not bytes -- these are the binary-safe pair,
-// distinct from the text b64enc/b64dec still used for signals.json below.
-const b64encBytes = bytes => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(""));
-const b64decBytes = s => Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0));
-
-/* Three ways an upload can be made to stick, best first:
-     1. written to book.sqlite on disk (via serve.py's POST route) -- the only
-        copy build_signals.py can see, so new tickers get prices;
-     2. kept in this browser (localStorage, base64) -- no setup, but invisible
-        to the nightly job and lost with the browser profile;
-     3. GitHub, if connected -- shared truth, wins on read.
-   Load order: GitHub > browser copy > book.sqlite on disk. The browser copy is
-   deliberately cleared once disk writing works, so there is one truth again. */
-const BOOK_KEY = "dl_book";
-const saveLocal = () => { try{ localStorage.setItem(BOOK_KEY, b64encBytes(bookBytes())); }catch(e){} };
-function clearLocal(){ localStorage.removeItem(BOOK_KEY); loadBook(); }
-
-/* serve.py accepts a POST and writes book.sqlite for us. That's the only copy
-   build_signals.py reads, so a stock added through Import gets prices the same
-   night -- with no picker, no permission prompt and no browser restrictions.
-   Returns false when the page isn't being served by serve.py, and the caller
-   falls back to the browser copy. */
-let diskOk = null;                        // null = not tried yet, for the panel
-let ghOk = null;                          // same, for the GitHub half of the last save
-// A static host (GitHub Pages, a custom domain, ...) can never run serve.py,
-// so the POST below would always fail there anyway -- skip the round trip
-// entirely and let the panel say so accurately, instead of "not tried yet"
-// silently turning into a failed network request every single save.
-const isLocalHost = ["localhost", "127.0.0.1"].includes(location.hostname);
-async function saveToServer(){
-  if (!isLocalHost){ diskOk = false; return false; }
-  try{
-    const r = await fetch("book.sqlite", { method: "POST",
-      headers: { "Content-Type": "application/octet-stream" }, body: bookBytes() });
-    diskOk = r.ok;
-  }catch(e){ diskOk = false; }
-  return diskOk;
-}
-
-async function loadBook(){
-  await initSql();
-  let j = null, from = "book.sqlite";
-  ghErr = ""; bookSha = null;
-  // Connected: read through the API. It hands back the sha the next save needs,
-  // and it's authoritative -- a CDN can serve a stale book.sqlite for minutes
-  // after a commit, which reads as "my edit didn't save".
-  if (canEdit()){
-    try{ const g = await ghFetch("GET"); j = stateFromDb(b64decBytes(g.content)); bookSha = g.sha;
-         from = "GitHub"; }
-    catch(e){ ghErr = e.message; }        // fall through to the published copy, read-only
-  }
-  if (!j){
-    const saved = localStorage.getItem(BOOK_KEY);
-    if (saved){
-      try{ j = stateFromDb(b64decBytes(saved)); from = "saved in this browser"; }
-      catch(e){ localStorage.removeItem(BOOK_KEY); }   // corrupt: don't wedge the app
+/* ================= API CLIENT =================
+   Every backend call goes through here: timeout, retry with backoff,
+   in-flight de-duplication, one place that turns a failure into a message.
+   There is no other fetch() in this file. */
+const API = {
+  inflight: new Map(),
+  get(path, {timeout = 10000, retries = 2} = {}){
+    // Two renders asking for the same screen in the same tick share one
+    // request instead of racing two identical ones.
+    if (API.inflight.has(path)) return API.inflight.get(path);
+    const p = API._send("GET", path, null, timeout, retries)
+      .finally(() => API.inflight.delete(path));
+    API.inflight.set(path, p);
+    return p;
+  },
+  post(path, body, {timeout = 60000} = {}){
+    return API._send("POST", path, body, timeout, 0);   // uploads are not idempotent
+  },
+  async _send(method, path, body, timeout, retries){
+    let last;
+    for (let i = 0; i <= retries; i++){
+      try{
+        const r = await fetch(API_BASE + path, {method, body,
+          signal: AbortSignal.timeout(timeout)});
+        if (r.ok) return await r.json();
+        const j = await r.json().catch(() => ({}));
+        const e = new Error(j.detail || `${method} ${path} — HTTP ${r.status}`);
+        e.status = r.status;
+        throw e;
+      }catch(e){
+        // 4xx is this request's own fault; retrying re-sends the same bad
+        // request. Only network errors and 5xx are worth another go.
+        if (e.status && e.status < 500) throw e;
+        last = e;
+        if (i < retries) await new Promise(s => setTimeout(s, 300 * 2 ** i));
+      }
     }
+    throw last;
   }
-  if (!j){
+};
+
+/* ================= STORE =================
+   Holds the last response per screen plus loading/error state. Nothing
+   here derives a business figure -- it stores what the backend said. */
+const ENDPOINT = {
+  dashboard: "/api/dashboard", portfolio: "/api/portfolio", risk: "/api/risk",
+  performance: "/api/performance", exposure: "/api/exposure",
+  positions: "/api/positions", signals: "/api/signals", history: "/api/history"
+};
+const ALL = Object.keys(ENDPOINT);
+
+const store = {
+  data: {}, loading: new Set(), error: null, _subs: [],
+  subscribe(fn){ store._subs.push(fn); },
+  _emit(){ for (const fn of store._subs) fn(); },
+  async load(screens = ALL){
+    for (const s of screens) store.loading.add(s);
+    store._emit();
     try{
-      const r = await fetch("book.sqlite", {cache:"no-store"});
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      j = stateFromDb(new Uint8Array(await r.arrayBuffer()));
+      const out = await Promise.all(screens.map(s => API.get(ENDPOINT[s])));
+      screens.forEach((s, i) => { store.data[s] = out[i]; });
+      store.error = null;
     }catch(e){
-      state = { holdings: [], trades: [], cash: 0,
-        srcH: `book.sqlite not loaded -- ${e.message}`,
-        srcT: "serve the folder with start_dashboard.bat, not file://" };
-      renderAll(); return;
+      store.error = e.message;
+    }finally{
+      for (const s of screens) store.loading.delete(s);
+      store._emit();
     }
   }
-  // Zero holdings is a real, expected state now -- a fresh database before
-  // anyone has uploaded a holdings file -- not a load failure, so it renders
-  // the same empty dashboard rather than an error screen.
-  const trades = j.trades || [];
-  const label = j.source && from !== "book.sqlite" ? `${j.source} - ${from}` : from;
-  state = { holdings: j.holdings || [], trades, cash: j.cash ?? 0,
-    srcH: j.holdings?.length
-      ? `Holdings: ${label} - ${j.holdings.length} names${j.updated ? " - " + j.updated : ""}`
-      : "No holdings yet -- upload a holdings file (and a trades file) on the Import tab.",
-    srcT: trades.length ? `Trades: ${trades.length}` : "No trades recorded" };
-  // What's genuinely persisted right now, as of this load -- Save Permanently
-  // diffs against this (not against whatever's merely on screen) to find
-  // tickers that are actually new to the saved book.
-  lastSavedTickers = new Set(state.holdings.map(h=>h.tk));
-  renderAll(); renderGh();
-}
-let staged = null, activeSlot = null;
-let lastSavedTickers = new Set();   // populated by loadBook(); see Save Permanently below
-/* ================= HELPERS ================= */
-/* Every holding field is operator-entered free text rendered through innerHTML.
-   Escape at the render site, never at rest: a book stored pre-escaped round-trips
-   J&KBANK into J&amp;KBANK the first time anyone opens the editor. */
+};
+
+/* ================= FORMAT (presentation only) =================
+   Turns a number the backend computed into a display string. No business
+   figure is derived here. */
 const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = {
-  pct:(x,s=1)=> (x>0&&s?"+":"") + (x*100).toFixed(1) + "%",
-  w:(x)=> (x*100).toFixed(0)+"%",
-  z:(v)=> (v>0?"+":"") + v.toFixed(2) + "σ",
-  inr:(v)=> (v<0?"−₹":"₹") + Math.round(Math.abs(v)).toLocaleString("en-IN"),
-  lakh:(v)=> (v<0?"−":"") + "₹" + (Math.abs(v)/100000).toFixed(1) + "L",
-  d:(dt)=> dt instanceof Date && !isNaN(dt) ? dt.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"}) : "—"
+  pct:(x,s=1)=> x==null ? "—" : (x>0&&s?"+":"") + (x*100).toFixed(1) + "%",
+  w:(x)=> x==null ? "—" : (x*100).toFixed(0)+"%",
+  z:(v)=> v==null ? "—" : (v>0?"+":"") + v.toFixed(2) + "σ",
+  inr:(v)=> v==null ? "—" : (v<0?"−₹":"₹") + Math.round(Math.abs(v)).toLocaleString("en-IN"),
+  lakh:(v)=> v==null ? "—" : (v<0?"−":"") + "₹" + (Math.abs(v)/100000).toFixed(1) + "L",
+  d:(s)=> { if(!s) return "—"; const dt=new Date(s);
+    return isNaN(dt) ? "—" : dt.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"}); }
 };
-const sig = tk => SIGNALS[tk] || null;
-const cmpOf = tk => sig(tk)?.cmp ?? null;
-const upside = h => { const c=cmpOf(h.tk); return (c && h.tp!=null) ? h.tp/c - 1 : null; };
-const bucketOf = tk => { const m=sig(tk)?.mcap; return m==null?"—": m>=CUTS.large?"Large": m>=CUTS.mid?"Mid":"Small"; };
-// Real conviction text isn't always a clean "High"/"Medium"/"Low" enum (e.g.
-// "Medium (Watchlist)") — bucket by prefix so composition colour + the
-// conviction-check insight still work, without altering the displayed text.
-const convBucket = conv => { if(!conv) return null;
-  const c = String(conv).trim().toLowerCase();
-  return c.startsWith("high")?"High": c.startsWith("medium")?"Medium": c.startsWith("low")?"Low": null; };
-const statusOf = h => { const u=upside(h);
-  return h.fullWt===0 ? ["EXITING","b-rev","var(--down)"]
-       : u==null ? ["NO FEED","b-near","var(--amber)"]
-       : u<=0 ? ["TARGET HIT","b-rev","var(--down)"]
-       : u<.10 ? ["NEAR TARGET","b-near","var(--amber)"]
-       : ["ON THESIS","b-ok","var(--up)"]; };
-const builtOf = h => h.fullWt===0 ? "Exiting" : h.fullWt ? (h.wt>=h.fullWt-0.001 ? "Full" : Math.round(h.wt/h.fullWt*100)+"% built") : "Full";
-const W = () => state.holdings.reduce((a,h)=>a+h.wt,0) || 1;
-const wavg = f => state.holdings.reduce((a,h)=>{const v=f(h); return v==null?a:a+h.wt*v;},0)/W();
 function showView(v){
-  for (const k of ["ov","exp","risk","perf","posn","imp"]){
+  for (const k of ["ov","exp","risk","perf","posn","hist","imp"]){
     document.getElementById("v-"+k).classList.toggle("active", k===v);
     document.getElementById("t-"+k).classList.toggle("active", k===v);
   }
 }
-/* ================= P&L ENGINE (avg-cost, mirrors Excel) ================= */
-function perfCalc(){
-  const by = {};
-  for (const t of state.trades){
-    const o = by[t.tk] ??= {buyQ:0,buyV:0,sellQ:0,sellV:0,fees:0,last:null};
-    if (t.side==="Buy"){ o.buyQ+=t.qty; o.buyV+=t.qty*t.price; }
-    else { o.sellQ+=t.qty; o.sellV+=t.qty*t.price; }
-    o.fees += t.costs||0; o.last = t.price;
-  }
-  const rows = Object.entries(by).map(([tk,o])=>{
-    const avg = o.buyQ ? o.buyV/o.buyQ : 0;
-    const net = o.buyQ - o.sellQ;
-    const cmp = cmpOf(tk) ?? o.last;
-    const h = state.holdings.find(x=>x.tk===tk);
-    const unreal = net*(cmp-avg);
-    const realized = o.sellV - o.sellQ*avg;
-    const total = unreal + realized - o.fees;
-    return { tk, h, net, avg, cmp, marked:!!cmpOf(tk), unreal, realized, fees:o.fees,
-             total, invested:o.buyV, ret:o.buyV?total/o.buyV:0,
-             sector: h?.sector || "Unmapped", analyst: h?.analyst || "—",
-             bucket: bucketOf(tk), momo: sig(tk)?.momo ?? null };
-  }).sort((a,b)=>b.total-a.total);
-  const sum = f => rows.reduce((a,r)=>a+f(r),0);
-  return { rows, bought:sum(r=>r.invested), realized:sum(r=>r.realized),
-           unreal:sum(r=>r.unreal), fees:sum(r=>r.fees), total:sum(r=>r.total) };
-}
-const groupPL = (rows, keyFn) => {
-  const g = {};
-  rows.forEach(r=>{ const k=keyFn(r); g[k]=(g[k]||0)+r.total; });
-  return Object.entries(g).sort((a,b)=>b[1]-a[1]);
-};
+/* Bar width as a % of the axis -- visualisation geometry, not a business
+   figure. The values themselves come from the backend. */
 const barList = (pairs) => {
   const maxAbs = Math.max(...pairs.map(([,v])=>Math.abs(v)), 1);
   return pairs.map(([k,v])=>{
@@ -545,114 +382,71 @@ const barList = (pairs) => {
       <div class="val ${v>=0?"pos":"neg"}">${fmt.lakh(v)}</div></div>`;
   }).join("");
 };
-/* ================= COMPOSITION MATH ================= */
-function composition(){
-  const H = state.holdings;
-  const pendingAdds = H.reduce((a,h)=>a + Math.max((h.fullWt??h.wt)-h.wt,0), 0);
-  const exits = H.filter(h=>h.fullWt===0).reduce((a,h)=>a+h.wt,0);
-  const trims = H.filter(h=>h.fullWt>0 && h.fullWt<h.wt).reduce((a,h)=>a+(h.wt-h.fullWt),0);
-  const fullBuild = H.reduce((a,h)=>a+(h.fullWt??h.wt),0);
-  const convW = {High:0, Medium:0, Low:0};
-  H.forEach(h=>{ const b=convBucket(h.conv); if(b) convW[b]+=h.wt; });
-  const stagedNames = H.filter(h=>h.fullWt>h.wt);
-  const top3 = [...H].sort((a,b)=>b.wt-a.wt).slice(0,3);
-  return { pendingAdds, exits, trims, fullBuild, convW, stagedNames, top3,
-           equity: W(), cash: state.cash };
+const pairsOf = buckets => (buckets||[]).map(b => [b.key, b.pl]);
+const insightHTML = list => (list||[])
+  .map(i=>`<div class="insight"><span class="tag">${esc(i.tag)}</span>${i.text}</div>`).join("");
+const empty = msg => `<div class="panel" style="text-align:center;font-family:'IBM Plex Mono';
+  font-size:13px;color:var(--dim);padding:40px;line-height:1.9">${msg}</div>`;
+
+/* ================= RENDER: HEADER ================= */
+function renderHeader(){
+  const d = store.data.dashboard;
+  const el = document.getElementById("asof");
+  if (!d){ el.innerHTML = `<span style="color:var(--faint)">connecting to backend…</span>`; return; }
+  const f = d.feed || {};
+  // sourceFile is the label the book was saved under and already carries its
+  // own name count and date; appending ours repeated both.
+  const srcH = d.holdingsCount
+    ? `Holdings: ${esc(d.sourceFile || d.holdingsCount + " names")}`
+    : "No holdings yet -- upload a holdings file on the Import tab.";
+  const srcT = d.tradesCount ? `Trades: ${d.tradesCount}` : "No trades recorded";
+  el.innerHTML = `${srcH} · ${srcT}<br>Signal feed: ` +
+    `<b style="color:${f.live?"var(--up)":"var(--amber)"}">${f.live?"LIVE · ":""}${esc(f.asOf ? f.asOf.replace("T"," ").slice(0,16) : "no signal feed loaded yet")}</b>` +
+    ` <button onclick="refresh()" style="font-family:'IBM Plex Mono';font-size:10px;color:var(--saffron);background:none;border:1px solid rgba(242,169,59,.4);border-radius:3px;padding:1px 6px;cursor:pointer;margin-left:6px">↻ refresh</button>`;
 }
-/* ================= INSIGHTS ================= */
-function insights(P, C){
-  const out = [];
-  // --- composition reads first ---
-  const postAddCash = C.cash - C.pendingAdds + C.exits + C.trims;
-  out.push([`Composition`, `Book is <b>${fmt.w(C.equity)} deployed</b> against a full-build target of ${fmt.w(C.fullBuild)}. ` +
-    `Staged adds pending: <b>${fmt.w(C.pendingAdds)}</b> (${C.stagedNames.map(h=>esc(h.tk)).join(", ")}) vs cash of ${fmt.w(C.cash)} — ` +
-    (C.pendingAdds<=C.cash ? `fully funded from cash. ` : `<b>underfunded by ${fmt.w(C.pendingAdds-C.cash)}</b> — identify the trim source now, not at the trigger. `) +
-    (C.exits>0 ? `The ${fmt.w(C.exits)} exit sleeve (${state.holdings.filter(h=>h.fullWt===0).map(h=>esc(h.tk)).join(", ")}) returns further powder; ` : "") +
-    `steady-state cash at full build ≈ <b>${fmt.w(Math.max(postAddCash,0))}</b>.`]);
-  const top3w = C.top3.reduce((a,h)=>a+h.wt,0);
-  if (top3w/C.equity > 0.5)
-    out.push([`Concentration`, `Top-3 (${C.top3.map(h=>esc(h.tk)).join(", ")}) = <b>${fmt.w(top3w)}</b> of NAV, ${(top3w/C.equity*100).toFixed(0)}% of equity. Acceptable for a conviction book, but note two of three staged adds deepen existing sector bets rather than diversify.`]);
-  if (C.convW.Low > 0.12)
-    out.push([`Conviction check`, `<b>${fmt.w(C.convW.Low)}</b> of NAV sits in Low-conviction names (${state.holdings.filter(h=>convBucket(h.conv)==="Low").map(h=>esc(h.tk)).join(", ")}). Enforce exit rules on this sleeve — it's the designated funding source if staged triggers fire before exits complete.`]);
-  const eventGated = state.holdings.filter(h=>h.fullWt>h.wt && !h.addLvl);
-  if (eventGated.length)
-    out.push([`Sequencing`, `${eventGated.map(h=>"<b>"+esc(h.tk)+"</b>").join(", ")} adds are event-gated, not price-gated — they cannot be pre-funded by limit orders. Calendar the catalysts so the powder isn't redeployed elsewhere first.`]);
-  if (!P.rows.length) return out;
-  // --- performance/factor reads ---
-  const top = P.rows[0];
-  const share = P.total ? top.total/P.total : 0;
-  if (share > 0.3 && P.total > 0)
-    out.push([`P&L concentration`, `<b>${esc(top.tk)}</b> is ${(share*100).toFixed(0)}% of total P&L — book-level outcome currently rides one name.`]);
-  const hiM = P.rows.filter(r=>r.momo!=null && r.momo>=0.5);
-  const hiPL = hiM.reduce((a,r)=>a+r.total,0);
-  if (P.total>0 && hiPL/P.total > 0.5)
-    out.push([`Factor read`, `${(hiPL/P.total*100).toFixed(0)}% of P&L comes from high-momentum names (${hiM.map(r=>esc(r.tk)).join(", ")}). The book is being paid for momentum, not value — a market-neutral India momentum sleeve is the cleanest side expression of the same signal.`]);
-  const wSec = {};
-  state.holdings.forEach(h=>wSec[h.sector]=(wSec[h.sector]||0)+h.wt);
-  const indAct = (wSec["Industrials"]||0)/W() - (BENCH_SECT["Industrials"]||0);
-  if (indAct > 0.05)
-    out.push([`Crowding`, `Industrials is ${fmt.pct(indAct)} active — BEL + Kaynes make it a <b>defense/electronics-capex bet</b>, and the Kaynes staged add deepens it further. Related side bets elsewhere in the complex add to an exposure the book already carries; size them against this, not in isolation.`]);
-  state.holdings.forEach(h=>{
-    const u = upside(h), s = sig(h.tk);
-    if (u==null || !s) return;
-    if (u >= 0.15 && s.momo <= -0.5)
-      out.push([`Divergence`, `<b>${esc(h.tk)}</b>: ${fmt.pct(u)} modelled upside but ${fmt.z(s.momo)} momentum — thesis and tape disagree. The staged-entry discipline exists for exactly this: let the trigger do the timing.`]);
-    if (u !== null && u <= 0.05 && u > -1 && s.momo >= 0.5 && h.fullWt>0)
-      out.push([`Divergence`, `<b>${esc(h.tk)}</b>: tape (${fmt.z(s.momo)} momentum) has run ahead of the ${fmt.pct(u)} remaining upside — either the target is stale or the trim rule applies.`]);
-  });
-  const vz = wavg(h=>sig(h.tk)?.val);
-  if (vz < -0.5)
-    out.push([`Posture`, `Weighted value z is ${fmt.z(vz)} — the book pays up for growth/quality, and both staged adds (Sun, Titan) would buy <i>corrections</i>, partially self-correcting this. If the momentum regime turns, the ${fmt.w(C.cash)} cash is the real hedge; deploy the staged tranches patiently.`]);
-  return out;
-}
+
 /* ================= RENDER: OVERVIEW ================= */
 function renderOverview(){
-  const P = perfCalc();
-  const C = composition();
   const el = document.getElementById("ov-body");
-  const ret = P.bought ? P.total/P.bought : 0;
-  const ins = insights(P, C);
+  const d = store.data.dashboard, p = store.data.portfolio;
+  if (!d || !p){ el.innerHTML = empty("Loading from backend…"); return; }
+  if (!d.holdingsCount){
+    el.innerHTML = empty("No holdings yet.<br>Upload a holdings file (and a trades file) on the Import tab.");
+    return;
+  }
+  const C = p.composition;
   const convCol = {High:"var(--up)", Medium:"var(--blue)", Low:"var(--amber)"};
   const segBar = (items, cashW) => `<div class="compbar">` +
-    items.map(([tk,w,col])=> w>0.001 ? `<div style="width:${w*100}%;background:${col}">` +
-      (w>0.05?`<span class="seg-lbl">${tk}</span>`:"") + `</div>` : "").join("") +
+    items.map(i => i.wt>0.001 ? `<div style="width:${i.wt*100}%;background:${convCol[i.conviction]||"var(--blue)"}">` +
+      (i.wt>0.05?`<span class="seg-lbl">${esc(i.tk)}</span>`:"") + `</div>` : "").join("") +
     (cashW>0.001?`<div style="width:${cashW*100}%;background:#39435C"><span class="seg-lbl" style="color:var(--dim)">CASH ${fmt.w(cashW)}</span></div>`:"") +
     `</div>`;
-  const cur = state.holdings.map(h=>[h.tk, h.wt, convCol[convBucket(h.conv)]||"var(--blue)"]);
-  const full = state.holdings.filter(h=>h.fullWt>0).map(h=>[h.tk, h.fullWt, convCol[convBucket(h.conv)]||"var(--blue)"]);
   const fullCash = Math.max(1 - C.fullBuild, 0);
-  const stagedRows = state.holdings
-    .filter(h=>h.fullWt>h.wt || h.fullWt===0 || (h.fullWt>0&&h.fullWt<h.wt))
-    .map(h=>{
-      const s = sig(h.tk);
-      const kind = h.fullWt===0 ? "Exit" : h.fullWt>h.wt ? "Add" : "Trim";
-      const delta = h.fullWt===0 ? -h.wt : h.fullWt-h.wt;
-      const trig = h.addLvl ? "₹"+h.addLvl.toLocaleString("en-IN") : (kind==="Add" ? "Event" : "Rule");
-      const dist = h.addLvl && s ? fmt.pct(h.addLvl/s.cmp-1) : "—";
-      return `<tr><td>${esc(h.tk)}</td><td>${kind}</td>
-        <td>${fmt.w(h.wt)} → ${fmt.w(h.fullWt)}</td>
-        <td class="${delta>=0?"pos":"neg"}">${fmt.pct(delta)}</td>
-        <td>${trig}</td><td>${dist}</td>
-        <td class="wraptext">${esc(h.strategy || "—")}</td></tr>`;
-    }).join("");
+  const stagedRows = p.stagedActions.map(s=>
+    `<tr><td>${esc(s.tk)}</td><td>${esc(s.kind)}</td>
+      <td>${fmt.w(s.wt)} → ${fmt.w(s.fullWt)}</td>
+      <td class="${s.delta>=0?"pos":"neg"}">${fmt.pct(s.delta)}</td>
+      <td>${esc(s.trigger)}</td><td>${s.distance==null?"—":fmt.pct(s.distance)}</td>
+      <td class="wraptext">${esc(s.strategy)}</td></tr>`).join("");
+
   el.innerHTML = `
   <div class="stats">
-    ${[["Total P&L",fmt.inr(P.total),"after costs · "+fmt.pct(ret)+" on gross",P.total>=0?"pos":"neg"],
-       ["Realized",fmt.inr(P.realized),"avg-cost basis",P.realized>=0?"pos":"neg"],
-       ["Unrealized",fmt.inr(P.unreal),"marked to feed CMPs",P.unreal>=0?"pos":"neg"],
-       ["Equity",fmt.w(C.equity),"of NAV · "+state.holdings.length+" names",""],
-       ["Cash",fmt.w(C.cash),"vs "+fmt.w(C.pendingAdds)+" staged adds",""],
-       ["Wtd upside",fmt.pct(wavg(upside)),"to analyst targets","pos"]]
+    ${[["Total P&L",fmt.inr(d.overallPL),"after costs · "+fmt.pct(d.overallReturn)+" on gross",d.overallPL>=0?"pos":"neg"],
+       ["Realized",fmt.inr(d.realized),"avg-cost basis",d.realized>=0?"pos":"neg"],
+       ["Unrealized",fmt.inr(d.unrealized),"marked to feed CMPs",d.unrealized>=0?"pos":"neg"],
+       ["Equity",fmt.w(d.equityWeight),"of NAV · "+d.holdingsCount+" names",""],
+       ["Cash",fmt.w(d.cashWeight),"vs "+fmt.w(C.pendingAdds)+" staged adds",""],
+       ["Wtd upside",fmt.pct(d.weightedUpside),"to analyst targets","pos"]]
       .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
   </div>
   <div class="sec">Composition <small>current vs full build · colour = conviction</small></div>
   <div class="panel compwrap">
-    <div class="comprow"><div class="lab">Current</div>${segBar(cur, C.cash)}</div>
-    <div class="comprow"><div class="lab">Full build</div>${segBar(full, fullCash)}</div>
+    <div class="comprow"><div class="lab">Current</div>${segBar(C.current, C.cash)}</div>
+    <div class="comprow"><div class="lab">Full build</div>${segBar(C.fullBuildBars, fullCash)}</div>
     <div class="complegend">
-      <span><span class="dot" style="background:var(--up)"></span>High conviction ${fmt.w(C.convW.High)}</span>
-      <span><span class="dot" style="background:var(--blue)"></span>Medium ${fmt.w(C.convW.Medium)}</span>
-      <span><span class="dot" style="background:var(--amber)"></span>Low ${fmt.w(C.convW.Low)}</span>
+      <span><span class="dot" style="background:var(--up)"></span>High conviction ${fmt.w(C.convictionWeights.High)}</span>
+      <span><span class="dot" style="background:var(--blue)"></span>Medium ${fmt.w(C.convictionWeights.Medium)}</span>
+      <span><span class="dot" style="background:var(--amber)"></span>Low ${fmt.w(C.convictionWeights.Low)}</span>
       <span><span class="dot" style="background:#39435C"></span>Cash</span>
     </div>
   </div>
@@ -663,287 +457,156 @@ function renderOverview(){
   </table></div>
   <div class="sec">P&L attribution <small>total P&L after costs, grouped four ways</small></div>
   <div class="attr-grid">
-    <div class="panel"><h3>By sector</h3>${barList(groupPL(P.rows, r=>r.sector))}</div>
-    <div class="panel"><h3>By momentum cohort</h3>${barList(groupPL(P.rows, r=>r.momo==null?"No signal":r.momo>=0.5?"High momo":r.momo<=-0.5?"Low momo":"Mid momo"))}</div>
-    <div class="panel"><h3>By size</h3>${barList(groupPL(P.rows, r=>r.bucket))}</div>
-    <div class="panel"><h3>By analyst</h3>${barList(groupPL(P.rows, r=>r.analyst))}</div>
+    <div class="panel"><h3>By sector</h3>${barList(pairsOf(p.attribution.bySector))}</div>
+    <div class="panel"><h3>By momentum cohort</h3>${barList(pairsOf(p.attribution.byMomentum))}</div>
+    <div class="panel"><h3>By size</h3>${barList(pairsOf(p.attribution.bySize))}</div>
+    <div class="panel"><h3>By analyst</h3>${barList(pairsOf(p.attribution.byAnalyst))}</div>
   </div>
   <div class="sec">Insights <small>rule-based reads for the IC — judgement stays human</small></div>
-  ${ins.map(([tag,txt])=>`<div class="insight"><span class="tag">${tag}</span>${txt}</div>`).join("")}
+  ${insightHTML(p.insights)}
   <div class="foot">Realized P&L on full-period average cost. Return is money-weighted — TWR/XIRR would need
   dated cash flows, which arrive with the trades file. Prices and z-scores come from build_signals.py
-  (Yahoo Finance, refreshed nightly by GitHub Actions).</div>`;
+  (Yahoo Finance, refreshed nightly by GitHub Actions). All figures computed by the backend.</div>`;
 }
+
 /* ================= RENDER: EXPOSURES ================= */
 function renderExposures(){
   const el = document.getElementById("exp-body");
-  const wSec = {};
-  state.holdings.forEach(h=>wSec[h.sector]=(wSec[h.sector]||0)+h.wt);
-  const P = perfCalc();
-  const plSec = Object.fromEntries(groupPL(P.rows, r=>r.sector));
-  const held = Object.keys(wSec);
-  const notHeld = Object.entries(BENCH_SECT).filter(([s])=>!held.includes(s));
-  const notHeldW = notHeld.reduce((a,[,w])=>a+w,0);
-  const sizeW = {Large:0,Mid:0,Small:0};
-  state.holdings.forEach(h=>{const b=bucketOf(h.tk); if(sizeW[b]!=null) sizeW[b]+=h.wt;});
-  const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D"};
-  /* Book tilt per factor, plus the name at each end. Unlike the mock, our feed
-     returns null for a name with no fundamentals or under a year of history —
-     those are excluded from the ranking rather than sorted as if they were 0,
-     which would put them in the middle and hide the real extremes. */
-  const FACTORS = [
-    ["Value",    s=>s.val,  "P/E, P/B, EV/EBITDA · +ve = cheaper than the universe"],
-    ["Momentum", s=>s.momo, "12M−1M plus 6M return · +ve = stronger tape"],
-    ["Quality",  s=>s.qual, "ROE, leverage, net margin · +ve = higher quality"],
-  ];
-  const factorRows = FACTORS.map(([name, getZ, note])=>{
-    const wz = wavg(h=>{const s=sig(h.tk); return s?getZ(s):null;});
-    const scored = state.holdings
-      .map(h=>({tk:h.tk, z:sig(h.tk) ? getZ(sig(h.tk)) : null}))
-      .filter(r=>r.z!=null).sort((a,b)=>b.z-a.z);
-    const cell = r => r ? `${esc(r.tk)} <span class="${r.z>=0?"pos":"neg"}">${fmt.z(r.z)}</span>`
-                        : `<span style="color:var(--faint)">—</span>`;
-    const zc = v => v>=0.3 ? "pos" : v<=-0.3 ? "neg" : "";
-    // Coverage rides in the note rather than its own column: without it,
-    // "highest momentum" reads as beating all 15 when it only beat the 11 scored.
-    const cover = scored.length < state.holdings.length
-      ? ` · ${scored.length} of ${state.holdings.length} names scored` : "";
-    return `<tr><td>${name}<div style="font-size:10px;color:var(--faint);white-space:normal">${note}${cover}</div></td>
-      <td class="${zc(wz)}" style="font-weight:600">${scored.length?fmt.z(wz):"—"}</td>
-      <td style="text-align:left">${!scored.length?"no data"
-         : wz>=0.3?"Above index" : wz<=-0.3?"Below index" : "Near index"}</td>
-      <td>${cell(scored[0])}</td>
-      <td>${cell(scored[scored.length-1])}</td></tr>`;
+  const e = store.data.exposure;
+  if (!e){ el.innerHTML = empty("Loading from backend…"); return; }
+  const benchName = (e.feed && e.feed.index) || "the index";
+  const zc = v => v==null ? "" : v>=0.3 ? "pos" : v<=-0.3 ? "neg" : "";
+  const cell = r => r ? `${esc(r.tk)} <span class="${r.z>=0?"pos":"neg"}">${fmt.z(r.z)}</span>`
+                      : `<span style="color:var(--faint)">—</span>`;
+  const factorRows = e.factors.map(f=>{
+    const cover = f.scored < f.total ? ` · ${f.scored} of ${f.total} names scored` : "";
+    return `<tr><td>${esc(f.factor)}<div style="font-size:10px;color:var(--faint);white-space:normal">${esc(f.note)}${cover}</div></td>
+      <td class="${zc(f.bookZ)}" style="font-weight:600">${f.bookZ==null?"—":fmt.z(f.bookZ)}</td>
+      <td style="text-align:left">${esc(f.tilt)}</td>
+      <td>${cell(f.highest)}</td>
+      <td>${cell(f.lowest)}</td></tr>`;
   }).join("");
-  const secRows = held.sort((a,b)=>wSec[b]-wSec[a]).map(s=>{
-    const pw = wSec[s]/W(), bw = BENCH_SECT[s]||0, act = pw-bw;
-    const bwid = Math.min(Math.abs(act)*300, 60);
-    return `<tr><td>${esc(s)}</td><td>${(pw*100).toFixed(1)}%</td><td>${(bw*100).toFixed(1)}%</td>
-      <td class="${act>=0?"pos":"neg"}">${fmt.pct(act)}
-        <span class="actbar" style="width:${bwid}px;background:${act>=0?"var(--up)":"var(--down)"}"></span></td>
-      <td class="${(plSec[s]||0)>=0?"pos":"neg"}">${fmt.lakh(plSec[s]||0)}</td></tr>`;
-  }).join("") + `<tr><td style="color:var(--faint)">Not held (${notHeld.length} sectors)</td>
-      <td>0.0%</td><td>${(notHeldW*100).toFixed(1)}%</td>
-      <td class="neg">${fmt.pct(-notHeldW)}</td><td>—</td></tr>`;
+  const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D"};
+  const secRows = e.sectors.map(s=>{
+    const bwid = Math.min(Math.abs(s.active)*300, 60);
+    return `<tr><td>${esc(s.sector)}</td><td>${(s.portfolio*100).toFixed(1)}%</td><td>${(s.benchmark*100).toFixed(1)}%</td>
+      <td class="${s.active>=0?"pos":"neg"}">${fmt.pct(s.active)}
+        <span class="actbar" style="width:${bwid}px;background:${s.active>=0?"var(--up)":"var(--down)"}"></span></td>
+      <td class="${s.pl>=0?"pos":"neg"}">${fmt.lakh(s.pl)}</td></tr>`;
+  }).join("") + `<tr><td style="color:var(--faint)">Not held (${e.notHeld.count} sectors)</td>
+      <td>0.0%</td><td>${(e.notHeld.benchmarkWeight*100).toFixed(1)}%</td>
+      <td class="neg">${fmt.pct(-e.notHeld.benchmarkWeight)}</td><td>—</td></tr>`;
   el.innerHTML = `
   <div class="sec">Factor profile <small>weighted z-scores vs the ${esc(benchName)} cross-section</small></div>
   <div class="twrap" style="margin-bottom:18px"><table class="ptable">
     <thead><tr><th>Factor</th><th>Book</th><th style="text-align:left">Tilt</th><th>Highest</th><th>Lowest</th></tr></thead>
     <tbody>${factorRows}</tbody>
   </table></div>
-  <div class="sec">Size <small>${benchLive?"vs mcap-weighted "+esc(benchName):"vs static placeholder weights"}</small></div>
+  <div class="sec">Size <small>${e.benchmarkLive?"vs mcap-weighted "+esc(benchName):"vs static placeholder weights"}</small></div>
   <div class="panel" style="margin-bottom:18px">
     <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;margin-bottom:8px">
-      ${Object.entries(sizeW).map(([k,v])=>`<div style="width:${v/W()*100}%;background:${sc[k]}"></div>`).join("")}
+      ${e.size.map(s=>`<div style="width:${s.portfolio*100}%;background:${sc[s.bucket]}"></div>`).join("")}
     </div>
     <div style="display:flex;gap:14px;font-family:'IBM Plex Mono';font-size:11px;color:var(--dim);flex-wrap:wrap">
-      ${Object.entries(sizeW).map(([k,v])=>`<span><span class="dot" style="background:${sc[k]}"></span>${k} ${(v/W()*100).toFixed(0)}% (idx ${(BENCH_SIZE[k]*100).toFixed(0)})</span>`).join("")}
+      ${e.size.map(s=>`<span><span class="dot" style="background:${sc[s.bucket]}"></span>${s.bucket} ${(s.portfolio*100).toFixed(0)}% (idx ${(s.benchmark*100).toFixed(0)})</span>`).join("")}
     </div>
   </div>
-  <div class="sec">Sector exposure <small>active weight and P&L contribution · benchmark ${benchLive?`<b style='color:var(--up)'>LIVE ${esc(benchName)}</b>`:"static placeholder"}</small></div>
+  <div class="sec">Sector exposure <small>active weight and P&L contribution · benchmark ${e.benchmarkLive?`<b style='color:var(--up)'>LIVE ${esc(benchName)}</b>`:"static placeholder"}</small></div>
   <div class="twrap"><table class="ptable">
     <thead><tr><th>Sector</th><th>Portfolio</th><th>Benchmark</th><th>Active</th><th>P&L</th></tr></thead>
     <tbody>${secRows}</tbody>
   </table></div>
-  <div class="foot">${benchLive
+  <div class="foot">${e.benchmarkLive
     ? `Benchmark sector and size are market-cap weighted across the official ${esc(benchName)} constituents, re-fetched from NSE on every run. One deviation from the published index: weights use full market cap, not free float, so the largest promoter-held names carry slightly more here than in the real index.`
     : "Benchmark sector and size weights are a static placeholder — the live feed either doesn't include bench_sect/bench_size yet, or is unreachable."}</div>`;
 }
-/* ================= RENDER: POSITIONS ================= */
-function renderPositions(){
-  document.getElementById("asof").innerHTML =
-    `${state.srcH} · ${state.srcT}<br>Signal feed: <b style="color:${feedMeta.live?"var(--up)":"var(--amber)"}">${feedMeta.live?"LIVE · ":""}${feedMeta.asof}</b>` +
-    ` <button onclick="loadSignals()" style="font-family:'IBM Plex Mono';font-size:10px;color:var(--saffron);background:none;border:1px solid rgba(242,169,59,.4);border-radius:3px;padding:1px 6px;cursor:pointer;margin-left:6px">↻ refresh</button>`;
-  document.getElementById("rows").innerHTML = [...state.holdings].sort((a,b)=>b.wt-a.wt).map(h=>{
-    const s = sig(h.tk), u = upside(h), [txt,cls,col] = statusOf(h);
-    const cmp = s?.cmp;
-    const lo = s?.lo ?? ((cmp && h.tp!=null) ? Math.min(cmp,h.tp)*0.88 : null);
-    let railHtml = `<div class="cell" style="color:var(--faint)">no price feed</div>`;
-    if (cmp && lo && h.tp!=null){
-      const hiAnchor = Math.max(h.tp, cmp);
-      const loAnchor = h.addLvl ? Math.min(lo, h.addLvl*0.98) : lo;
-      const span = hiAnchor*1.03 - loAnchor;
-      const x = v => (Math.min(99, Math.max(0,(v-loAnchor)/span*100))).toFixed(1)+"%";
-      // Right-align the TP label so it sits inside the rail — except when the
-      // target is near the left end (a target-hit name), where right-aligning
-      // runs it straight back over the low label. Then drop the low label.
-      const tpPct = parseFloat(x(h.tp));
-      // Add-level label sits below the track (TP/lo sit above), so the two
-      // never collide vertically. It still needs the same left/right flip TP
-      // uses, or a trigger near the rail's edge runs its price off the card.
-      let addLbl = "";
-      if (h.addLvl){
-        const addPct = parseFloat(x(h.addLvl));
-        addLbl = `<span class="addlbl" style="left:${x(h.addLvl)};transform:translateX(${addPct > 65 ? "-100%" : "0"})">Add ${Math.round(h.addLvl).toLocaleString("en-IN")}</span>`;
-      }
-      railHtml = `<div class="rail">
-        ${tpPct > 34 ? `<span class="lo" style="left:0">${Math.round(loAnchor).toLocaleString("en-IN")}</span>` : ""}
-        <span class="tg" style="left:${x(h.tp)};transform:translateX(${tpPct > 34 ? "-100%" : "0"})">TP ${Math.round(h.tp).toLocaleString("en-IN")}</span>
-        <div class="track"></div>
-        ${h.addLvl?`<div class="add" style="left:${x(h.addLvl)}" title="Add ₹${h.addLvl}"></div>`:""}
-        ${addLbl}
-        <div class="tp" style="left:${x(h.tp)}"></div>
-        <div class="cmp" style="left:${x(cmp)};border-color:${col}"></div></div>`;
-    } else if (cmp && h.tp==null){
-      railHtml = `<div class="cell" style="color:var(--faint)">CMP ${fmt.inr(cmp)} · no target set</div>`;
-    }
-    const zc = v => v==null?"—":`<b style="color:${v>=0.5?"var(--up)":v<=-0.5?"var(--down)":"var(--dim)"}">${fmt.z(v)}</b>`;
-    return `<div class="row" onclick="this.classList.toggle('open')">
-      <div class="row-main">
-        <div class="nm2"><span class="tk">${esc(h.tk)}</span><span class="bucket">${bucketOf(h.tk)}</span><span class="built">${builtOf(h)}</span>
-          <div class="co">${esc(h.co)}</div>
-          <div class="meta">${esc(h.industry||h.sector||"—")} · ${esc(h.analyst||"—")} · Conviction ${esc(h.conv||"—")}</div></div>
-        <div class="cell"><div class="lbl">Weight</div>${(h.wt*100).toFixed(1)}%<div class="sub">full ${h.fullWt!=null?fmt.w(h.fullWt):"—"}</div></div>
-        ${railHtml}
-        <div class="cell ${u!=null&&u>=0?"pos":"neg"}"><div class="lbl">Upside</div>${u!=null?fmt.pct(u):"—"}<div class="sub">${cmp?"CMP "+fmt.inr(cmp):""}</div></div>
-        <div class="cell"><div class="lbl">Signals</div><div class="sigchips">
-          <span>V ${zc(s?.val)}</span><span>M ${zc(s?.momo)}</span><span>Q ${zc(s?.qual)}</span></div></div>
-        <div class="cell"><div class="lbl">Status</div><span class="badge ${cls}">${txt}</span></div>
-      </div>
-      <div class="detail">
-        <span class="dlab">Thesis — ${esc(h.analyst||"")}</span>${esc(h.thesis||"No thesis entered.")}
-        <div class="strat"><span class="dlab">Strategy</span>${esc(h.strategy||"No strategy entered.")}</div>
-      </div>
-    </div>`;
-  }).join("");
-}
-/* ================= RENDER: RISK =================
-   Every scenario is a price the book has actually traded at, or a move it has
-   actually made — no covariance model, no simulated distribution. f() returns
-   null when the feed lacks the input (a recent listing has no 5-year history),
-   and that name is dropped from the scenario rather than counted as zero. */
-const SCENARIOS = [
-  {key:"mid",   name:"Mid of 52W range", desc:"every stock reverts to (52W high + low) / 2",
-   f:s=> (s.hi!=null && s.lo!=null && s.cmp) ? ((s.hi+s.lo)/2)/s.cmp-1 : null},
-  {key:"give1m",name:"Give up 1M gains",  desc:"stocks that rose unwind the month; decliners held flat",
-   f:s=> s.r1m!=null ? Math.min(0, 1/(1+s.r1m)-1) : null},
-  {key:"low",   name:"Retest 52W low",    desc:"every stock trades back to its 52-week low",
-   f:s=> (s.lo!=null && s.cmp) ? s.lo/s.cmp-1 : null},
-  {key:"worst", name:"Worst month repeats", desc:"each stock repeats its worst 1-month window of the last 5 years",
-   f:s=> s.worstM ?? null},
-];
+
+/* ================= RENDER: RISK ================= */
 function renderRisk(){
   const el = document.getElementById("risk-body");
-  const H = state.holdings.filter(h=>sig(h.tk));
-  if (!H.length){
-    el.innerHTML = `<div class="panel" style="text-align:center;font-family:'IBM Plex Mono';
-      font-size:13px;color:var(--dim);padding:40px">No priced holdings — run build_signals.py.</div>`;
-    return;
-  }
-  const scen = SCENARIOS.map(sc=>{
-    const rows = H.map(h=>{ const chg = sc.f(sig(h.tk));
-      return { tk:h.tk, wt:h.wt, chg, nav: chg==null?null:h.wt*chg }; });
-    const priced = rows.filter(r=>r.nav!=null);
-    return { ...sc, rows, priced, total: priced.reduce((a,r)=>a+r.nav,0),
-             missing: rows.length - priced.length };
-  });
-  const wBeta = wavg(h=>sig(h.tk)?.beta);
-  const mid = scen[0].priced.slice().sort((a,b)=>a.nav-b.nav);
-  const worstTwo = mid.slice(0,2);
-  const worstShare = (scen[0].total && worstTwo.length===2)
-    ? (worstTwo[0].nav+worstTwo[1].nav)/scen[0].total : 0;
-  const maxAbs = Math.max(...scen.map(s=>Math.abs(s.total)), 0.001);
+  const r = store.data.risk;
+  if (!r){ el.innerHTML = empty("Loading from backend…"); return; }
+  if (!r.priced){ el.innerHTML = empty("No priced holdings — run build_signals.py."); return; }
+  const maxAbs = Math.max(...r.scenarios.map(s=>Math.abs(s.navImpact)), 0.001);
   const pc = v => v==null ? "—" : fmt.pct(v);
-
-  const reads = [];
-  reads.push([`Read`, `The ladder is deliberately conservative: <b>every stock moves at once, with no
-    correlation credit</b>. A real book would usually lose less. The ${fmt.w(state.cash)} cash cushion is
-    already reflected, because impacts are expressed on NAV rather than on equity.`]);
-  if (worstShare > 0.35)
-    reads.push([`Concentration of risk`, `<b>${worstTwo.map(r=>esc(r.tk)).join(" + ")}</b> carry
-      ${(worstShare*100).toFixed(0)}% of the mid-range scenario loss — the same names driving return are
-      driving the tail. Size them against this, not against their weight alone.`]);
-  if (wBeta)
-    reads.push([`Beta`, `Weighted beta ${wBeta.toFixed(2)} on ${fmt.w(W())} equity ≈
-      <b>${(wBeta*W()).toFixed(2)} portfolio beta to the Nifty</b>. A 10% index fall implies roughly
-      ${fmt.pct(-0.10*wBeta*W())} on NAV before anything stock-specific.`]);
-  const thin = scen[0].missing;
-  if (thin)
-    reads.push([`Coverage`, `<b>${thin} of ${H.length}</b> holdings have no 5-year history yet
-      (recent listings). They are excluded from the ladder rather than counted as unchanged, so the
-      totals below understate a full-book move.`]);
-
   el.innerHTML = `
   <div class="stats">
-    ${[["Wtd beta", wBeta?wBeta.toFixed(2):"—", wBeta?"portfolio "+(wBeta*W()).toFixed(2)+" incl. cash":"no beta yet",""],
-       ...scen.map(s=>[s.name, pc(s.total), "NAV impact", s.total>=0?"pos":"neg"])]
-      .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
+    ${[["Wtd beta", r.weightedBeta?r.weightedBeta.toFixed(2):"—",
+        r.weightedBeta?"portfolio "+(r.weightedBeta*r.equityWeight).toFixed(2)+" incl. cash":"no beta yet",""],
+       ...r.scenarios.map(s=>[s.name, pc(s.navImpact), "NAV impact", s.navImpact>=0?"pos":"neg"])]
+      .map(([k,v,s,c])=>`<div class="stat"><div class="k">${esc(k)}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
   </div>
   <div class="sec">Scenario ladder <small>NAV impact if the whole book moves at once — no correlation credit</small></div>
   <div class="panel" style="margin-bottom:18px">
-    ${scen.map(s=>{
-      const w = Math.abs(s.total)/maxAbs*48, left = s.total<0 ? 50-w : 50;
+    ${r.scenarios.map(s=>{
+      const w = Math.abs(s.navImpact)/maxAbs*48, left = s.navImpact<0 ? 50-w : 50;
       return `<div class="plbar" style="grid-template-columns:160px 1fr 84px">
-        <div title="${esc(s.desc)}">${esc(s.name)}</div>
+        <div title="${esc(s.description)}">${esc(s.name)}</div>
         <div class="axis"><div class="zero"></div>
-          <div class="bar" style="left:${left}%;width:${w}%;background:${s.total>=0?"var(--up)":"var(--down)"}"></div></div>
-        <div class="val ${s.total>=0?"pos":"neg"}">${pc(s.total)}</div></div>`;
+          <div class="bar" style="left:${left}%;width:${w}%;background:${s.navImpact>=0?"var(--up)":"var(--down)"}"></div></div>
+        <div class="val ${s.navImpact>=0?"pos":"neg"}">${pc(s.navImpact)}</div></div>`;
     }).join("")}
   </div>
   <div class="sec">Per-stock scenarios <small>price change · NAV impact in brackets</small></div>
   <div class="twrap" style="margin-bottom:18px"><table class="ptable">
-    <thead><tr><th>Ticker</th><th>Wt</th>${SCENARIOS.map(s=>`<th>${esc(s.name)}</th>`).join("")}</tr></thead>
+    <thead><tr><th>Ticker</th><th>Wt</th>${r.scenarios.map(s=>`<th>${esc(s.name)}</th>`).join("")}</tr></thead>
     <tbody>
-    ${H.map(h=>`<tr><td>${esc(h.tk)}</td><td>${fmt.w(h.wt)}</td>` +
-      SCENARIOS.map(sc=>{ const chg = sc.f(sig(h.tk));
+    ${r.perStock.map(p=>`<tr><td>${esc(p.tk)}</td><td>${fmt.w(p.wt)}</td>` +
+      r.scenarios.map(s=>{ const chg = p.changes[s.key];
         if (chg==null) return `<td style="color:var(--faint)">—</td>`;
         return `<td class="${chg>=0?"pos":"neg"}">${fmt.pct(chg)}
-          <span style="color:var(--faint)">(${(h.wt*chg*10000).toFixed(0)}bp)</span></td>`;
+          <span style="color:var(--faint)">(${(p.wt*chg*10000).toFixed(0)}bp)</span></td>`;
       }).join("") + `</tr>`).join("")}
-    <tr><td style="font-weight:600">PORTFOLIO</td><td>${fmt.w(W())}</td>
-      ${scen.map(s=>`<td class="${s.total>=0?"pos":"neg"}" style="font-weight:600">${pc(s.total)}</td>`).join("")}</tr>
+    <tr><td style="font-weight:600">PORTFOLIO</td><td>${fmt.w(r.equityWeight)}</td>
+      ${r.scenarios.map(s=>`<td class="${s.navImpact>=0?"pos":"neg"}" style="font-weight:600">${pc(s.navImpact)}</td>`).join("")}</tr>
     </tbody>
   </table></div>
   <div class="sec">Stock risk metrics <small>from 5 years of daily prices</small></div>
   <div class="twrap" style="margin-bottom:18px"><table class="ptable">
     <thead><tr><th>Ticker</th><th>Beta</th><th>Daily σ</th><th>Worst 1M</th><th>Max drawdown</th><th>52W range position</th></tr></thead>
     <tbody>
-    ${H.map(h=>{ const s = sig(h.tk);
-      const p52 = (s.hi!=null && s.lo!=null && s.hi>s.lo) ? (s.cmp-s.lo)/(s.hi-s.lo) : null;
+    ${r.metrics.map(m=>{
       const d = (v,f) => v==null ? `<span style="color:var(--faint)">—</span>` : f(v);
-      return `<tr><td>${esc(h.tk)}</td>
-        <td>${d(s.beta, v=>v.toFixed(2))}</td>
-        <td>${d(s.dvol, v=>(v*100).toFixed(1)+"%")}</td>
-        <td class="neg">${d(s.worstM, v=>fmt.pct(v))}</td>
-        <td class="neg">${d(s.mdd, v=>fmt.pct(v))}</td>
-        <td>${d(p52, v=>(v*100).toFixed(0)+"% <span style='color:var(--faint)'>of 52W range</span>")}</td></tr>`;
+      return `<tr><td>${esc(m.tk)}</td>
+        <td>${d(m.beta, v=>v.toFixed(2))}</td>
+        <td>${d(m.dvol, v=>(v*100).toFixed(1)+"%")}</td>
+        <td class="neg">${d(m.worstM, v=>fmt.pct(v))}</td>
+        <td class="neg">${d(m.mdd, v=>fmt.pct(v))}</td>
+        <td>${d(m.range52wPosition, v=>(v*100).toFixed(0)+"% <span style='color:var(--faint)'>of 52W range</span>")}</td></tr>`;
     }).join("")}
     </tbody>
   </table></div>
-  ${reads.map(([tag,txt])=>`<div class="insight"><span class="tag">${tag}</span>${txt}</div>`).join("")}
+  ${insightHTML(r.reads)}
   <div class="foot">Every figure here is historical and descriptive — worst month and max drawdown are
   what happened, not a forecast. Computed nightly from 5 years of daily closes; beta is against the
   Nifty 50 on shared trading days. No covariance model: each number is reproducible from the price series.</div>`;
 }
+
 /* ================= RENDER: PERFORMANCE ================= */
 function renderPerformance(){
   const el = document.getElementById("perf-body");
-  if (!state.trades.length){
-    el.innerHTML = `<div class="panel" style="text-align:center;font-family:'IBM Plex Mono';
-      font-size:13px;color:var(--dim);padding:40px;line-height:1.9">
-      No trades loaded — P&L needs executions.<br>
-      Add a <b>Trades</b> sheet (Date, Ticker, Side, Qty, Price, Costs) and upload it on the Import tab.</div>`;
+  const p = store.data.performance;
+  if (!p){ el.innerHTML = empty("Loading from backend…"); return; }
+  if (!p.tradeCount){
+    el.innerHTML = empty(`No trades loaded — P&L needs executions.<br>
+      Add a <b>Trades</b> sheet (Date, Ticker, Side, Qty, Price, Costs) and upload it on the Import tab.`);
     return;
   }
-  const P = perfCalc();
-  const ret = P.bought ? P.total/P.bought : 0;
-  const dates = state.trades.map(t=>t.date).filter(d=>d instanceof Date && !isNaN(d));
-  const range = dates.length ? fmt.d(new Date(Math.min(...dates)))+" – "+fmt.d(new Date(Math.max(...dates))) : "";
-  const maxAbs = Math.max(...P.rows.map(r=>Math.abs(r.total)), 1);
-  const winners = P.rows.filter(r=>r.total>0).length;
+  const range = p.dateRange ? fmt.d(p.dateRange.from)+" – "+fmt.d(p.dateRange.to) : "";
+  const maxAbs = Math.max(...p.positions.map(r=>Math.abs(r.total)), 1);
   el.innerHTML = `
   <div class="stats">
-    ${[["Total P&L",fmt.inr(P.total),"after costs · "+fmt.pct(ret)+" on gross",P.total>=0?"pos":"neg"],
-       ["Realized",fmt.inr(P.realized),"avg-cost basis",P.realized>=0?"pos":"neg"],
-       ["Unrealized",fmt.inr(P.unreal),"marked to feed prices",P.unreal>=0?"pos":"neg"],
-       ["Costs",fmt.inr(P.fees),"brokerage + charges",""],
-       ["Gross bought",fmt.inr(P.bought),state.trades.length+" trades · "+range,""],
-       ["Hit rate",winners+" / "+P.rows.length,"names in profit",""]]
+    ${[["Total P&L",fmt.inr(p.totalPL),"after costs · "+fmt.pct(p.returnOnGross)+" on gross",p.totalPL>=0?"pos":"neg"],
+       ["Realized",fmt.inr(p.realized),"avg-cost basis",p.realized>=0?"pos":"neg"],
+       ["Unrealized",fmt.inr(p.unrealized),"marked to feed prices",p.unrealized>=0?"pos":"neg"],
+       ["Costs",fmt.inr(p.costs),"brokerage + charges",""],
+       ["Gross bought",fmt.inr(p.grossBought),p.tradeCount+" trades · "+range,""],
+       ["Hit rate",p.winners+" / "+p.positions.length,"names in profit",""]]
       .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
   </div>
   <div class="sec">P&L by position <small>after costs</small></div>
   <div class="panel" style="margin-bottom:18px">
-    ${P.rows.map(r=>{
+    ${p.positions.map(r=>{
       const w = Math.abs(r.total)/maxAbs*48, left = r.total<0 ? 50-w : 50;
       return `<div class="plbar"><div>${esc(r.tk)}</div>
         <div class="axis"><div class="zero"></div>
@@ -956,7 +619,7 @@ function renderPerformance(){
     <thead><tr><th>Ticker</th><th>Net Sh</th><th>Avg Cost</th><th>CMP</th><th>Mkt Value</th>
       <th>Unrealized</th><th>Realized</th><th>Costs</th><th>Total</th><th>Return</th></tr></thead>
     <tbody>
-    ${P.rows.map(r=>`<tr><td>${esc(r.tk)}${r.marked?"":" *"}</td><td>${r.net.toLocaleString("en-IN")}</td>
+    ${p.positions.map(r=>`<tr><td>${esc(r.tk)}${r.marked?"":" *"}</td><td>${r.net.toLocaleString("en-IN")}</td>
       <td>${fmt.inr(r.avg)}</td><td>${fmt.inr(r.cmp)}</td><td>${fmt.inr(r.net*r.cmp)}</td>
       <td class="${r.unreal>=0?"pos":"neg"}">${fmt.inr(r.unreal)}</td>
       <td class="${r.realized>=0?"pos":"neg"}">${fmt.inr(r.realized)}</td>
@@ -965,420 +628,321 @@ function renderPerformance(){
       <td class="${r.ret>=0?"pos":"neg"}">${fmt.pct(r.ret)}</td></tr>`).join("")}
     </tbody>
   </table></div>
-  <div class="sec">Trade log <small>${state.trades.length} executions · newest first</small></div>
+  <div class="sec">Trade log <small>${p.tradeCount} executions · newest first</small></div>
   <div class="twrap"><table class="ptable" style="min-width:520px">
     <thead><tr><th>Date</th><th>Ticker</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th><th>Costs</th></tr></thead>
     <tbody>
-    ${[...state.trades].sort((a,b)=>(b.date||0)-(a.date||0)).map(t=>
+    ${p.trades.map(t=>
       `<tr><td>${fmt.d(t.date)}</td><td>${esc(t.tk)}</td>
-        <td class="${t.side==="Buy"?"pos":"neg"}">${t.side}</td>
+        <td class="${t.side==="Buy"?"pos":"neg"}">${esc(t.side)}</td>
         <td>${t.qty.toLocaleString("en-IN")}</td><td>${fmt.inr(t.price)}</td>
-        <td>${fmt.inr(t.qty*t.price)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("")}
+        <td>${fmt.inr(t.value)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("")}
     </tbody>
   </table></div>
   <div class="foot">* ticker not in the price feed — marked at its last trade price.
   Realized P&L uses full-period average cost, matching the Excel; a buy after a sell restates that sell.
   Return is money-weighted on gross invested — TWR/XIRR would come from the dated cash flows above.</div>`;
 }
-function renderAll(){ renderOverview(); renderExposures(); renderRisk(); renderPerformance(); renderPositions(); }
-/* ================= EDIT: GitHub-backed writes =================
-   book.sqlite is the store and the GitHub Contents API is the write path — no
-   server, and every save is a commit, so history, blame and revert come free.
-   A fine-grained PAT lives in this browser's localStorage; no token means the
-   dashboard is read-only, which is the correct default for viewers. */
-const GH_KEY = "dl_gh";
-let gh = null, bookSha = null, ghErr = "";
-try { gh = JSON.parse(localStorage.getItem(GH_KEY) || "null"); } catch(e){ gh = null; }
-const canEdit = () => !!(gh && gh.repo && gh.token);
 
-const b64enc = s => { let o = "";
-  for (const b of new TextEncoder().encode(s)) o += String.fromCharCode(b);
-  return btoa(o); };
-const b64dec = s => new TextDecoder().decode(
-  Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0)));
+/* ================= RENDER: POSITIONS ================= */
+function renderPositions(){
+  const ps = store.data.positions;
+  const el = document.getElementById("rows");
+  if (!ps){ el.innerHTML = ""; return; }
+  el.innerHTML = ps.positions.map(h=>{
+    let railHtml = `<div class="cell" style="color:var(--faint)">no price feed</div>`;
+    if (h.rail){
+      const r = h.rail;
+      const addLbl = r.addPct==null ? "" :
+        `<span class="addlbl" style="left:${r.addPct}%;transform:translateX(${r.addPct > 65 ? "-100%" : "0"})">Add ${Math.round(h.addLvl).toLocaleString("en-IN")}</span>`;
+      railHtml = `<div class="rail">
+        ${r.tpPct > 34 ? `<span class="lo" style="left:0">${Math.round(r.loAnchor).toLocaleString("en-IN")}</span>` : ""}
+        <span class="tg" style="left:${r.tpPct}%;transform:translateX(${r.tpPct > 34 ? "-100%" : "0"})">TP ${Math.round(h.tp).toLocaleString("en-IN")}</span>
+        <div class="track"></div>
+        ${r.addPct!=null?`<div class="add" style="left:${r.addPct}%" title="Add ₹${h.addLvl}"></div>`:""}
+        ${addLbl}
+        <div class="tp" style="left:${r.tpPct}%"></div>
+        <div class="cmp" style="left:${r.cmpPct}%;border-color:${h.status.colour}"></div></div>`;
+    } else if (h.cmp && h.tp==null){
+      railHtml = `<div class="cell" style="color:var(--faint)">CMP ${fmt.inr(h.cmp)} · no target set</div>`;
+    }
+    const zc = v => v==null?"—":`<b style="color:${v>=0.5?"var(--up)":v<=-0.5?"var(--down)":"var(--dim)"}">${fmt.z(v)}</b>`;
+    const s = h.signals || {};
+    return `<div class="row" onclick="this.classList.toggle('open')">
+      <div class="row-main">
+        <div class="nm2"><span class="tk">${esc(h.tk)}</span><span class="bucket">${esc(h.bucket)}</span><span class="built">${esc(h.built)}</span>
+          <div class="co">${esc(h.co)}</div>
+          <div class="meta">${esc(h.industry||h.sector||"—")} · ${esc(h.analyst||"—")} · Conviction ${esc(h.conviction||"—")}</div></div>
+        <div class="cell"><div class="lbl">Weight</div>${(h.wt*100).toFixed(1)}%<div class="sub">full ${h.fullWt!=null?fmt.w(h.fullWt):"—"}</div></div>
+        ${railHtml}
+        <div class="cell ${h.upside!=null&&h.upside>=0?"pos":"neg"}"><div class="lbl">Upside</div>${h.upside!=null?fmt.pct(h.upside):"—"}<div class="sub">${h.cmp?"CMP "+fmt.inr(h.cmp):""}</div></div>
+        <div class="cell"><div class="lbl">Signals</div><div class="sigchips">
+          <span>V ${zc(s.val)}</span><span>M ${zc(s.momo)}</span><span>Q ${zc(s.qual)}</span></div></div>
+        <div class="cell"><div class="lbl">Status</div><span class="badge ${h.status.class}">${esc(h.status.text)}</span></div>
+      </div>
+      <div class="detail">
+        <span class="dlab">Thesis — ${esc(h.analyst||"")}</span>${esc(h.thesis||"No thesis entered.")}
+        <div class="strat"><span class="dlab">Strategy</span>${esc(h.strategy||"No strategy entered.")}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
 
-async function ghFetch(method, body, path = "book.sqlite"){
-  const url = `https://api.github.com/repos/${gh.repo}/contents/${path}` +
-    (method === "GET" ? `?ref=${encodeURIComponent(gh.branch || "main")}` : "");
-  const r = await fetch(url, { method,
-    headers: { Authorization:`Bearer ${gh.token}`, Accept:"application/vnd.github+json" },
-    ...(body ? {body: JSON.stringify(body)} : {}) });
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(
-    r.status === 409 || r.status === 422
-      ? `${path} moved on ahead of you — someone else saved since this page loaded. Reload, then redo the edit.`
-      : r.status === 404 ? `repo, branch or ${path} not found (check the token can see this repo)`
-      : r.status === 401 ? "token rejected — expired, or missing Contents: Read and write"
-      : (j.message || `GitHub ${r.status}`));
-  return j;
+/* ================= RENDER: HISTORY =================
+   Charts are hand-drawn SVG. Phase 4 removed every CDN library and a line
+   chart is not worth adding one back for -- these are ~30 lines of path
+   maths and reuse the dashboard's own palette. Nothing here computes a
+   business figure: the backend's daily snapshots supply every number. */
+function svgLine(points, valueOf, {height = 130, fmtY = v => v, colour = "var(--saffron)"} = {}){
+  const W = 1000, H = height, padL = 52, padR = 8, padT = 10, padB = 20;
+  const vals = points.map(valueOf);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (lo === hi){ lo -= Math.abs(lo || 1) * 0.1; hi += Math.abs(hi || 1) * 0.1; }
+  const x = i => padL + (points.length < 2 ? (W-padL-padR)/2 : i/(points.length-1)*(W-padL-padR));
+  const y = v => padT + (1 - (v-lo)/(hi-lo)) * (H-padT-padB);
+  const d = points.map((p,i)=>`${i?"L":"M"}${x(i).toFixed(1)},${y(valueOf(p)).toFixed(1)}`).join("");
+  const area = `${d}L${x(points.length-1).toFixed(1)},${H-padB}L${x(0).toFixed(1)},${H-padB}Z`;
+  const ticks = [lo, (lo+hi)/2, hi];
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+    ${ticks.map(t=>`<line class="grid" x1="${padL}" x2="${W-padR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>
+       <text class="axlbl" x="0" y="${(y(t)+3).toFixed(1)}">${fmtY(t)}</text>`).join("")}
+    <path class="area" d="${area}" style="fill:${colour}"/>
+    <path class="line" d="${d}" style="stroke:${colour}"/>
+    ${points.map((p,i)=>`<circle class="dot" cx="${x(i).toFixed(1)}" cy="${y(valueOf(p)).toFixed(1)}" r="${points.length>60?1.5:3}" style="fill:${colour}"><title>${esc(p.date)} · ${fmtY(valueOf(p))}</title></circle>`).join("")}
+  </svg>`;
 }
-/* Fires the same nightly job on demand (Actions "workflow_dispatch"), so a
-   newly added holding gets a price within minutes instead of waiting for 6pm.
-   Best-effort: needs the token to ALSO carry Actions: Read and write, which
-   the original Contents-only setup doesn't grant — on 403 we say so plainly
-   and the stock still gets priced at tonight's scheduled run regardless. */
-async function triggerNightlyRun(){
-  try{
-    const r = await fetch(`https://api.github.com/repos/${gh.repo}/actions/workflows/update-signals.yml/dispatches`,
-      { method:"POST", headers:{ Authorization:`Bearer ${gh.token}`, Accept:"application/vnd.github+json",
-        "Content-Type":"application/json" }, body: JSON.stringify({ ref: gh.branch || "main" }) });
-    if (r.status === 204) return { ok:true };
-    const j = await r.json().catch(()=>({}));
-    return { ok:false, reason:
-      r.status === 403 ? `token can't trigger workflows — add "Actions: Read and write" permission to it, then reconnect`
-      : r.status === 404 ? "update-signals.yml not found on this branch"
-      : r.status === 401 ? "token rejected"
-      : (j.message || `GitHub ${r.status}`) };
-  }catch(e){ return { ok:false, reason: e.message }; }
+function svgBars(points, valueOf, {height = 110} = {}){
+  const W = 1000, H = height, padL = 52, padR = 8, padT = 8, padB = 20;
+  const vals = points.map(valueOf);
+  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  const zero = padT + (H-padT-padB)/2;
+  const bw = Math.max(1.5, (W-padL-padR)/Math.max(points.length,1) * 0.65);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+    <line class="grid" x1="${padL}" x2="${W-padR}" y1="${zero}" y2="${zero}"/>
+    <text class="axlbl" x="0" y="${zero+3}">0</text>
+    ${points.map((p,i)=>{
+      const v = valueOf(p), h = Math.abs(v)/maxAbs * (H-padT-padB)/2;
+      const cx = padL + (points.length<2 ? (W-padL-padR)/2 : i/(points.length-1)*(W-padL-padR));
+      return `<rect x="${(cx-bw/2).toFixed(1)}" y="${(v>=0?zero-h:zero).toFixed(1)}" width="${bw.toFixed(1)}"
+        height="${Math.max(h,0.5).toFixed(1)}" fill="${v>=0?"var(--up)":"var(--down)"}"><title>${esc(p.date)} · ${fmt.lakh(v)}</title></rect>`;
+    }).join("")}
+  </svg>`;
 }
-async function saveBook(message){
-  const j = await ghFetch("PUT", { message, content: b64encBytes(bookBytes()),
-                                   sha: bookSha, branch: gh.branch || "main" });
-  bookSha = j.content.sha;
+/* Stacked allocation bands. Colours cycle through a fixed palette so a
+   sector keeps its colour across the whole series. */
+const SECTOR_COLOURS = ["#4E7BC4","#F2A93B","#43C08D","#E4604E","#8B6FC4","#3FA9B5","#C4A24E","#B5637F","#6F8FA0","#7FB55A"];
+function allocationChart(points, sectors){
+  const W = 1000, H = 130, padL = 52, padR = 8, padT = 8, padB = 20;
+  const colour = s => SECTOR_COLOURS[sectors.indexOf(s) % SECTOR_COLOURS.length];
+  const bw = Math.max(1.5, (W-padL-padR)/Math.max(points.length,1) * 0.8);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+    ${points.map((p,i)=>{
+      const cx = padL + (points.length<2 ? (W-padL-padR)/2 : i/(points.length-1)*(W-padL-padR));
+      let acc = 0;
+      return sectors.map(s=>{
+        const v = p.sectorAllocation[s] || 0;
+        if (!v) return "";
+        const h = v * (H-padT-padB), yy = padT + (H-padT-padB) - acc - h;
+        acc += h;
+        return `<rect x="${(cx-bw/2).toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}"
+          height="${h.toFixed(1)}" fill="${colour(s)}"><title>${esc(p.date)} · ${esc(s)} ${fmt.w(v)}</title></rect>`;
+      }).join("");
+    }).join("")}
+    <text class="axlbl" x="0" y="${padT+8}">100%</text>
+    <text class="axlbl" x="0" y="${H-padB}">0%</text>
+  </svg>`;
 }
-/* ---- connect / disconnect (Import tab). Never re-rendered by renderAll,
-   which would wipe whatever is half-typed in the token box. ---- */
-function renderGh(){
+function renderHistory(){
+  const el = document.getElementById("hist-body");
+  const h = store.data.history;
+  if (!h){ el.innerHTML = empty("Loading from backend…"); return; }
+  if (!h.count){
+    el.innerHTML = empty(`No snapshots yet.<br>The evening job writes one per day —
+      run <b>python scripts/daily_update.py</b>, or wait for tonight's scheduled run.`);
+    return;
+  }
+  const p = h.points, last = p[p.length-1];
+  const withDaily = p.filter(x=>x.dailyPL != null);
+  const up = withDaily.filter(x=>x.dailyPL > 0).length;
+  const single = h.count < 2;
+  el.innerHTML = `
+  <div class="stats">
+    ${[["Snapshots", String(h.count), h.first === h.last ? h.first : `${h.first} → ${h.last}`, ""],
+       ["Portfolio value", fmt.inr(last.portfolioValue), "latest close", ""],
+       ["Total P&L", fmt.inr(last.totalPL), "after costs", last.totalPL>=0?"pos":"neg"],
+       ["Change over period", h.changeSinceFirst==null?"—":fmt.inr(h.changeSinceFirst),
+        single?"needs a second day":"since first snapshot",
+        (h.changeSinceFirst||0)>=0?"pos":"neg"],
+       ["Cash", fmt.w(last.cashPct), "of NAV", ""],
+       ["Up days", withDaily.length?`${up} / ${withDaily.length}`:"—", "days in profit", ""]]
+      .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${esc(s)}</div></div>`).join("")}
+  </div>
+
+  <div class="sec">Portfolio value <small>market value of open positions, per snapshot</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    ${svgLine(p, x=>x.portfolioValue, {fmtY: v=>"₹"+(v/100000).toFixed(1)+"L"})}
+    <div class="hint">${esc(h.first)} → ${esc(h.last)}${single?" · one snapshot so far; the line grows a point each evening":""}</div>
+  </div>
+
+  <div class="sec">Total P&L <small>cumulative, after costs</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    ${svgLine(p, x=>x.totalPL, {fmtY: v=>"₹"+(v/100000).toFixed(1)+"L",
+      colour: last.totalPL>=0?"var(--up)":"var(--down)"})}
+  </div>
+
+  <div class="sec">Daily P&L <small>change in total P&L between consecutive snapshots</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    ${withDaily.length ? svgBars(withDaily, x=>x.dailyPL)
+      : `<div class="hint">Needs two snapshots. The first evening run has nothing to compare against.</div>`}
+  </div>
+
+  <div class="sec">Allocation <small>sector weights over time · hover a band for the exact weight</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    ${allocationChart(p, h.sectors)}
+    <div class="complegend" style="margin-top:10px">
+      ${h.sectors.map((s,i)=>`<span><span class="dot" style="background:${SECTOR_COLOURS[i % SECTOR_COLOURS.length]}"></span>${esc(s)} ${fmt.w(last.sectorAllocation[s]||0)}</span>`).join("")}
+    </div>
+  </div>
+
+  <div class="sec">Snapshot log <small>newest first</small></div>
+  <div class="twrap"><table class="ptable">
+    <thead><tr><th>Date</th><th>Value</th><th>Invested</th><th>Cash</th><th>Total P&L</th>
+      <th>Daily P&L</th><th>Unrealized</th><th>Realized</th><th>Names</th><th>Wtd beta</th></tr></thead>
+    <tbody>
+    ${[...p].reverse().map(x=>`<tr><td>${esc(x.date)}</td>
+      <td>${fmt.inr(x.portfolioValue)}</td><td>${fmt.inr(x.investedValue)}</td>
+      <td>${fmt.w(x.cashPct)}</td>
+      <td class="${x.totalPL>=0?"pos":"neg"}">${fmt.inr(x.totalPL)}</td>
+      <td class="${(x.dailyPL||0)>=0?"pos":"neg"}">${x.dailyPL==null?"—":fmt.inr(x.dailyPL)}</td>
+      <td class="${x.unrealizedPL>=0?"pos":"neg"}">${fmt.inr(x.unrealizedPL)}</td>
+      <td class="${x.realizedPL>=0?"pos":"neg"}">${fmt.inr(x.realizedPL)}</td>
+      <td>${x.holdingsCount}</td>
+      <td>${x.riskMetrics && x.riskMetrics.weightedBeta!=null ? x.riskMetrics.weightedBeta.toFixed(2) : "—"}</td></tr>`).join("")}
+    </tbody>
+  </table></div>
+  <div class="foot">One snapshot per day, written by scripts/daily_update.py after the market close.
+  A failed market-data fetch writes nothing at all, so a gap in this table means that evening's run
+  failed — the previous day's figures were never overwritten.</div>`;
+}
+
+/* ================= RENDER: BANNER + IMPORT STATUS ================= */
+function renderBanner(){
+  const el = document.getElementById("apibanner");
+  if (store.error){
+    el.className = "on err";
+    el.innerHTML = `<b>Backend unreachable — ${esc(store.error)}</b><br>` +
+      `Every figure on this dashboard is computed by the backend. Check it is running and that ` +
+      `<b>API_BASE</b> points at it, then <button onclick="refresh()" style="font-family:inherit;font-size:11px;` +
+      `color:var(--saffron);background:none;border:1px solid rgba(242,169,59,.4);border-radius:3px;padding:1px 6px;cursor:pointer">retry</button>`;
+  } else if (store.loading.size){
+    el.className = "on busy";
+    el.textContent = "Loading from backend…";
+  } else {
+    el.className = "";
+  }
+}
+function renderStatus(){
   const el = document.getElementById("ghpanel");
   if (!el) return;
-  const mini = "font-size:11px;padding:3px 10px;margin-left:8px";
-  // Four situations now that saving is a deliberate click, not automatic:
-  // never attempted yet, worked, failed while running locally, or can never
-  // work here because this is a static host with no server to write to
-  // (expected, not an error -- previously told to run start_dashboard.bat,
-  // which is local-only advice that makes no sense on a hosted page).
-  // GitHub success is checked first and wins regardless of disk: it's the
-  // more durable, shared store, so a save that reached GitHub but not the
-  // local disk is still a real, permanent save -- the old version only ever
-  // looked at diskOk, so that case wrongly showed "not saved" advice.
-  const statusMsg = (ghOk === true)
-    ? `<b style="color:var(--up)">✓ Last save committed to GitHub.</b> That's a durable, shared save --
-       it's there on any machine, with full history in the repo's commits.`
-    : diskOk === true
-    ? `<b style="color:var(--up)">✓ Last save reached book.sqlite on disk.</b> That's the file
-       build_signals.py reads, so a new ticker gets prices from the next run.`
-    : diskOk === null && ghOk === null
-    ? `Not saved yet. Upload a holdings file (and a trades file), then click <b>Save Permanently</b>
-       above.`
-    : canEdit() && ghOk === false
-    ? `<b style="color:var(--down)">Last save did not reach GitHub${ghErr ? ": " + esc(ghErr) : ""}.</b>
-       ${diskOk ? "It did save to book.sqlite on disk." : "It's kept in this browser only for now."}`
-    : !isLocalHost
-    ? `<b style="color:var(--amber)">Disk save isn't available on this page.</b>
-       This is a static hosted page -- there's no server here to write book.sqlite to, so that part
-       is never available on this link. Connect GitHub below for a save that survives across visits
-       and machines; otherwise Save Permanently keeps it in this browser only.`
-    : `<b style="color:var(--amber)">The last save reached this browser only, not disk.</b>
-       book.sqlite on disk wasn't written, so the nightly price job won't see stocks you added.
-       Start the dashboard with <b>start_dashboard.bat</b> to fix that.`;
-  let head = `<div class="ghstat" style="margin-bottom:12px">${statusMsg}</div>`;
-  const saved = localStorage.getItem(BOOK_KEY);
-  if (saved){
-    let d = {};
-    try{ d = stateFromDb(b64decBytes(saved)); }catch(e){}
-    head += `<div class="ghstat" style="margin-bottom:12px">
-        Saved copy in this browser: <b>${esc(d.source || "uploaded file")}</b> ·
-        ${(d.holdings||[]).length} names · ${(d.trades||[]).length} trades${d.updated ? " · " + esc(d.updated) : ""}.
-        It loads automatically every time you open the dashboard.
-        <button class="act ghost" style="${mini}"
-          onclick="if(confirm('Discard the saved upload and go back to the book.sqlite in this folder?')) clearLocal()"
-          >Reset to book.sqlite</button></div>`;
-  }
-  el.innerHTML = head + (canEdit()
-    ? `<div class="ghstat">Connected to <b>${esc(gh.repo)}</b> on branch <b>${esc(gh.branch || "main")}</b>.
-         ${ghErr ? `<br><b style="color:var(--down)">${esc(ghErr)}</b>`
-                 : "Uploads also commit to GitHub, so they survive a new machine."}</div>
-       <div class="btnrow"><button class="act ghost" onclick="ghDisconnect()">Disconnect</button></div>`
-    : `<div class="fgrid">
-         <div class="f"><label>Repository</label><input id="gh-repo" placeholder="owner/dl-india-core"></div>
-         <div class="f"><label>Branch</label><input id="gh-branch" value="main"></div>
-         <div class="f wide"><label>Fine-grained token</label>
-           <input id="gh-token" type="password" placeholder="github_pat_…">
-           <span class="hint">Needs <b>Contents: Read and write</b> on this one repo. Add
-             <b>Actions: Read and write</b> too and a new ticker gets priced within minutes of upload,
-             instead of waiting for the 6pm run. Stored in this browser's localStorage — anyone using
-             this browser profile can save with it, so don't connect on a shared machine.</span></div>
-       </div>
-       <div class="notice" id="gh-msg"></div>
-       <div class="btnrow"><button class="act" onclick="ghConnect()">Connect</button></div>`);
+  const d = store.data.dashboard;
+  el.innerHTML = store.error
+    ? `<div class="ghstat"><b style="color:var(--down)">Not connected to the backend.</b><br>
+       The dashboard reads every number from it, and every file is stored on Google Drive.</div>`
+    : `<div class="ghstat"><b style="color:var(--up)">✓ Connected to the backend.</b>
+       ${d ? `Serving <b>${d.holdingsCount}</b> holdings and <b>${d.tradesCount}</b> trades` +
+             `${d.sourceFile ? " from <b>"+esc(d.sourceFile)+"</b>" : ""}.` : ""}
+       <br>Uploads are stored on <b>Google Drive</b> and are permanent once saved. There is
+       deliberately no delete button here.</div>`;
 }
-function ghNote(t){
-  const m = document.getElementById("gh-msg");
-  m.className = "notice bad on"; m.textContent = t;
+
+function renderAll(){
+  renderHeader(); renderBanner(); renderOverview(); renderExposures();
+  renderRisk(); renderPerformance(); renderPositions(); renderHistory(); renderStatus();
 }
-async function ghConnect(){
-  const repo = document.getElementById("gh-repo").value.trim()
-    .replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "").replace(/\/$/, "");
-  const branch = document.getElementById("gh-branch").value.trim() || "main";
-  const token = document.getElementById("gh-token").value.trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return ghNote("Repository must look like owner/name.");
-  if (!token) return ghNote("A token is required.");
-  gh = { repo, branch, token };
-  try{
-    await ghFetch("GET");                        // prove the token can actually read it
-    localStorage.setItem(GH_KEY, JSON.stringify(gh));
-    ghErr = "";
-    await loadBook();                            // reload via the API to pick up the sha
-    loadSignals();                               // and pull tonight's prices from GitHub too
-    renderGh();
-  }catch(e){ gh = null; ghNote("Could not read book.sqlite — " + e.message); }
-}
-function ghDisconnect(){
-  localStorage.removeItem(GH_KEY);
-  gh = null; bookSha = null; ghErr = "";
-  renderGh(); loadBook(); loadSignals();
-}
-/* ================= IMPORT ================= */
-const num = v => { if (v==null||v==="") return null;
-  if (typeof v==="number") return v;
-  const n = parseFloat(String(v).replace(/[,₹%\s]/g,"")); return isNaN(n)?null:n; };
-/* Trade dates are whole days. SheetJS converts an Excel serial to a few seconds
-   BEFORE midnight (28 Nov 00:00 comes back as 27 Nov 23:59:50), which renders
-   every trade a day early — so snap to the nearest local midnight. */
-const asDate = v => {
-  const d = v instanceof Date ? v : (v ? new Date(v) : null);
-  if (!d || isNaN(d)) return null;
-  const midnight = new Date(d); midnight.setHours(0, 0, 0, 0);
-  return d - midnight > 43200000            // past midday? belongs to the next day
-    ? new Date(midnight.getTime() + 86400000) : midnight;
-};
-const sideOf = v => { const s=String(v||"").trim().toLowerCase(); return s==="buy"?"Buy":s==="sell"?"Sell":null; };
-/* One parser per format, not per sheet: find the header row, then reuse the
-   name-matching CSV readers. Handles both the DL template (headers part-way
-   down) and a flat export with headers on row 1. */
-function rowsFromSheet(ws){
-  const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
-  const i = rows.findIndex(r => (r||[]).some(c=>{
-    const s = String(c||"").toLowerCase().replace(/[^a-z0-9]/g,"");
-    return s==="ticker" || s==="nseticker" || s==="symbol" || s==="company";
-  }));
-  if (i < 0) throw "No header row found \u2014 need a Ticker, Symbol or Company column.";
-  return rows.slice(i);
-}
-function holdingsFromCSV(rows){
-  const hdr = rows[0].map(h=>String(h||"").toLowerCase().replace(/[^a-z0-9]/g,""));
-  const col = (...n)=>{for(const x of n){const i=hdr.indexOf(x); if(i>-1)return i;} return -1;};
-  const c = { co:col("company","name"), tk:col("ticker","nseticker","symbol"), sector:col("sector"),
-    industry:col("industry","subsector","theme"),
-    analyst:col("analyst"), tp:col("target","targetprice","tp"), wt:col("weight","wt"),
-    fullWt:col("fullweight","fullwt","targetweight"), addLvl:col("addlevel","addlvl","addprice"),
-    conv:col("conviction","conv"), thesis:col("thesis","comments","notes"), strategy:col("strategy","plan"),
-    // Optional escape hatch for a ticker Yahoo can't resolve as TICKER.NS or
-    // TICKER.BO — build_signals.py uses this verbatim instead of guessing.
-    yfSymbol:col("yfsymbol","yahoosymbol","yahooticker") };
-  if (c.tk<0 && c.co<0) throw "Holdings CSV needs a Ticker or Company column.";
-  if (c.tp<0) throw "Holdings CSV needs a Target column.";
-  const out = [];
-  const body = rows.slice(1).filter(r => { const g = i => i>-1?r[i]:null;
-    return g(c.co) || g(c.tk); });
-  // A weight column is written either as fractions (0.025) or as percents (2.5),
-  // and the whole column shares one convention. Decide once from the column
-  // TOTAL — book weights sum to ~1 as fractions, ~100 as percents. Judging each
-  // cell against a 1.5 cutoff instead reads a legitimate 1.2% position as 120%.
-  const scale = col => {
-    const vals = body.map(r => num(col>-1 ? r[col] : null)).filter(v => v != null);
-    const sum = vals.reduce((a,v) => a + v, 0);
-    return sum > 1.5 ? 100 : 1;
-  };
-  const wDiv = scale(c.wt), fDiv = c.fullWt > -1 ? scale(c.fullWt) : wDiv;
-  const pct = (v, div) => { const n = num(v); return n == null ? null : n / div; };
-  for (const r of body){
-    const g = i => i>-1?r[i]:null;
-    const wt = pct(g(c.wt), wDiv) ?? 0;
-    out.push({ tk:String(g(c.tk)||g(c.co)).trim().toUpperCase(), co:String(g(c.co)||g(c.tk)).trim(),
-      sector:g(c.sector), industry:g(c.industry), analyst:g(c.analyst), tp:num(g(c.tp)), wt,
-      fullWt: pct(g(c.fullWt), fDiv) ?? wt, addLvl:num(g(c.addLvl)),
-      yfSymbol: g(c.yfSymbol) ? String(g(c.yfSymbol)).trim() : null,
-      conv:g(c.conv), thesis:g(c.thesis)?String(g(c.thesis)):null,
-      strategy:g(c.strategy)?String(g(c.strategy)):null });
-  }
-  return out;
-}
-function tradesFromCSV(rows){
-  const hdr = rows[0].map(h=>String(h||"").toLowerCase().replace(/[^a-z0-9]/g,""));
-  const col = (...n)=>{for(const x of n){const i=hdr.indexOf(x); if(i>-1)return i;} return -1;};
-  const c = { date:col("date"), tk:col("ticker","symbol"), side:col("side"),
-              qty:col("qty","quantity","shares"), price:col("price"), costs:col("costs","fees","charges") };
-  if (c.tk<0 || c.side<0 || c.qty<0 || c.price<0) throw "Trades CSV needs Ticker, Side, Qty and Price columns.";
-  const out = [];
-  for (const r of rows.slice(1)){
-    const g = i => i>-1?r[i]:null;
-    const s = sideOf(g(c.side));
-    if (!g(c.tk) || !s || !num(g(c.qty)) || !num(g(c.price))) continue;
-    out.push({ date:asDate(g(c.date)), tk:String(g(c.tk)).trim().toUpperCase(), side:s,
-               qty:num(g(c.qty)), price:num(g(c.price)), costs:num(g(c.costs))||0 });
-  }
-  return out;
-}
-function pick(slot){ activeSlot = slot; document.getElementById("file-"+slot).click(); }
-function handleFile(file, slot){
-  const msg = document.getElementById("msg");
-  msg.className = "msg";
-  const reader = new FileReader();
-  reader.onload = e => {
-    try{
-      const wbk = XLSX.read(e.target.result, {type:"binary", cellDates:true});
-      let holdings=null, trades=null;
-      if (/\.csv$/i.test(file.name)){
-        const rows = XLSX.utils.sheet_to_json(wbk.Sheets[wbk.SheetNames[0]], {header:1, defval:null});
-        if (!rows.length) throw "Empty file.";
-        if (slot==="h") holdings = holdingsFromCSV(rows); else trades = tradesFromCSV(rows);
-      } else {
-        if (slot==="h"){
-          if (!wbk.Sheets["Portfolio"]) throw "No 'Portfolio' sheet in this workbook.";
-          holdings = holdingsFromCSV(rowsFromSheet(wbk.Sheets["Portfolio"]));
-          // Holdings zone imports holdings ONLY. An embedded Trades sheet is
-          // ignored on purpose — trades enter through the Trades zone, so a
-          // holdings upload can never smuggle executions in unnoticed.
-        } else {
-          if (!wbk.Sheets["Trades"]) throw "No 'Trades' sheet in this workbook.";
-          trades = tradesFromCSV(rowsFromSheet(wbk.Sheets["Trades"]));
-        }
-      }
-      if (slot==="h" && (!holdings || !holdings.length)) throw "No valid holdings rows found.";
-      if (slot==="t" && (!trades || !trades.length)) throw "No valid trade rows found.";
-      // A ticker never contains a space; a sector or company name usually does.
-      // Seeing them here means the header matched the wrong column, and loading
-      // would silently replace the book with nonsense rather than fail.
-      const notTickers = (holdings||[]).filter(h=>/\s/.test(h.tk)).map(h=>h.tk);
-      if (notTickers.length)
-        throw `Column mapping looks wrong — these were read as tickers: ${notTickers.slice(0,4).join(", ")}` +
-          `${notTickers.length>4?" …":""}. Check the Portfolio sheet has a "Ticker" header row above the data.`;
-      // Trades are a ledger, not a snapshot -- a new file ADDS to what's already
-      // recorded instead of replacing it, or every trades upload would erase
-      // every trade from before it. Deduped by (date, ticker, side, qty, price)
-      // so re-uploading the same file, or a file with overlapping rows, doesn't
-      // double-count -- only genuinely new rows are added.
-      let tradeDelta = null;
-      if (trades){
-        const key = t => `${t.date instanceof Date ? t.date.toISOString().slice(0,10) : t.date}|${t.tk}|${t.side}|${t.qty}|${t.price}`;
-        const already = new Set(state.trades.map(key));
-        const added = trades.filter(t => !already.has(key(t)));
-        tradeDelta = { merged: state.trades.concat(added), added: added.length, dup: trades.length - added.length };
-      }
-      staged = { ...state,
-        // Excel is the only input now, so it owns cash too: same rule as
-        // xlsx_to_book.py, cash = whatever the weights don't claim.
-        ...(holdings ? {holdings, cash: Math.max(0, 1 - holdings.reduce((a,h)=>a+h.wt,0)),
-                        srcH:"Holdings: "+file.name} : {}),
-        ...(trades ? {trades: tradeDelta.merged,
-                       srcT: `Trades: ${tradeDelta.merged.length} on record` +
-                             (tradeDelta.dup ? ` (+${tradeDelta.added} new from ${file.name}, ${tradeDelta.dup} already recorded)`
-                                             : ` (+${tradeDelta.added} new from ${file.name})`)} : {}) };
-      const missing = (holdings||[]).filter(h=>!sig(h.tk)).map(h=>h.tk);
-      msg.className = "msg ok";
-      msg.textContent = (holdings?`Parsed ${holdings.length} holdings`:"") +
-        (holdings&&trades?" and ":"") +
-        (trades?`${trades.length} trades (${tradeDelta.added} new${tradeDelta.dup?`, ${tradeDelta.dup} already recorded`:""})`:"") +
-        ` from ${file.name}.` +
-        (slot==="h" && wbk.Sheets["Trades"]
-          ? " Its Trades sheet was IGNORED — drop the file on the Trades zone to load executions." : "") +
-        (missing.length ? ` No signal feed for: ${missing.join(", ")} — shown without prices until the feed covers them.` : "") +
-        " Review, then load.";
-      if (holdings){
-        document.getElementById("phead").innerHTML =
-          "<th>Ticker</th><th>Company</th><th>Weight</th><th>Full wt</th><th>Target</th><th>Sector</th><th>Analyst</th>";
-        document.getElementById("pbody").innerHTML = holdings.map(h=>
-          `<tr><td>${h.tk}</td><td style="text-align:left">${h.co}</td><td>${(h.wt*100).toFixed(1)}%</td><td>${fmt.w(h.fullWt)}</td><td>${fmt.inr(h.tp)}</td><td>${h.sector||"—"}</td><td>${h.analyst||"—"}</td></tr>`).join("");
-      } else {
-        document.getElementById("phead").innerHTML =
-          "<th>Date</th><th>Ticker</th><th>Side</th><th>Qty</th><th>Price</th><th>Costs</th>";
-        document.getElementById("pbody").innerHTML = trades.map(t=>
-          `<tr><td>${fmt.d(t.date)}</td><td>${t.tk}</td><td>${t.side}</td><td>${t.qty.toLocaleString("en-IN")}</td><td>${fmt.inr(t.price)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("");
-      }
-      document.getElementById("pcount").textContent = file.name;
-      document.getElementById("preview").style.display = "block";
-    } catch(err){
-      msg.className = "msg err";
-      msg.textContent = "Import failed: " + err;
-      document.getElementById("preview").style.display = "none";
-    }
-  };
-  reader.readAsBinaryString(file);
-}
-/* Disk -> browser-fallback -> GitHub, in that order -- the same three-way
-   save every upload already went through, now shared with the delete action
-   below so both write through identical logic instead of two copies drifting
-   apart over time. */
-async function persistState(commitMessage){
-  const onDisk = await saveToServer();
-  // GitHub is tried BEFORE deciding on the browser fallback -- not after. The
-  // old order wrote a browser-only copy whenever disk failed even if the
-  // GitHub save right after it succeeded, which is exactly the redundant,
-  // confusing state a hosted page (disk always unavailable there) hits on
-  // every single save despite GitHub genuinely holding the real copy.
-  let ghSaved = false, ghError = null;
-  if (canEdit() && bookSha && !ghErr){
-    try{ await saveBook(commitMessage); ghSaved = true; }
-    catch(e){ ghError = e.message; }
-    ghOk = ghSaved;
-  }
-  if (onDisk || ghSaved) localStorage.removeItem(BOOK_KEY);   // a durable store has it
-  else saveLocal();                                            // neither did -- true last resort
-  renderGh();
-  return { onDisk, ghSaved, ghError };
-}
-async function commit(){
-  if (!staged) return;
-  state = staged; staged = null; renderAll(); showView("ov");
+
+/* ================= IMPORT =================
+   Pick file -> click Save Permanently -> POST -> report -> refresh.
+   Nothing is parsed in the browser and nothing is written until the
+   explicit, confirmed click. */
+const picked = {h:null, t:null};
+function pick(slot){ document.getElementById("file-"+slot).click(); }
+function chooseFile(file, slot){
+  picked[slot] = file;
   const msg = document.getElementById("msg");
   msg.className = "msg ok";
-  msg.textContent = `Loaded on screen -- not saved yet. Review, then click "Save Permanently" below ` +
-    `to store ${state.holdings.length} holdings and ${state.trades.length} trades for good.`;
+  msg.textContent = `Ready to upload: ` +
+    [picked.h && `holdings "${picked.h.name}"`, picked.t && `trades "${picked.t.name}"`]
+      .filter(Boolean).join(" and ") +
+    `. Nothing is saved yet — click "Save Permanently" below.`;
+  document.getElementById("preview").style.display = "none";
 }
-async function savePermanently(){
-  const n = state.holdings.length, m = state.trades.length;
-  if (!n && !m){ alert("Nothing to save yet -- upload a holdings file first."); return; }
-  if (!confirm(`Save ${n} holdings and ${m} trades permanently?\n\n` +
-               `This writes book.sqlite to disk${canEdit() ? " and commits it to GitHub" : ""}. ` +
-               `There is no undo button in the app -- see reset_book.py to wipe it later.`)) return;
-  const msg = document.getElementById("msg");
-  const r = await persistState(`save: ${n} holdings, ${m} trades (${state.srcH.replace(/^Holdings: /, "")})`);
-  if (r.ghError){
-    msg.className = "msg err";
-    msg.textContent = `Not fully saved -- the GitHub commit failed: ${r.ghError} -- ` +
-      (r.onDisk ? "it did save to book.sqlite on disk." : "it only saved to this browser.");
-    return;
-  }
-  const newTickers = state.holdings.map(h=>h.tk).filter(tk=>!lastSavedTickers.has(tk));
-  lastSavedTickers = new Set(state.holdings.map(h=>h.tk));
-  if (!newTickers.length){
-    msg.className = "msg ok";
-    msg.textContent = "Saved permanently.";
-    return;
-  }
-  if (!r.ghSaved){
-    msg.className = "msg ok";
-    msg.textContent = `Saved permanently. New ticker(s) ${newTickers.join(", ")} will get prices at ` +
-      `tonight's scheduled run -- connect GitHub above to trigger it immediately instead.`;
-    return;
-  }
-  const res = await triggerNightlyRun();
-  msg.className = res.ok ? "msg ok" : "msg err";
-  msg.textContent = res.ok
-    ? `Saved permanently. New ticker(s) ${newTickers.join(", ")} -- price fetch triggered now, expect prices in a few minutes.`
-    : `Saved permanently. New ticker(s) ${newTickers.join(", ")} -- couldn't auto-trigger a price fetch (${res.reason}). ` +
-      `They'll be priced at tonight's scheduled run, or trigger it yourself: Actions -> update-signals -> Run workflow.`;
-}
-
-
 function resetImport(){
-  staged = null;
+  picked.h = picked.t = null;
   document.getElementById("preview").style.display = "none";
   document.getElementById("msg").className = "msg";
   document.getElementById("file-h").value = ""; document.getElementById("file-t").value = "";
 }
+function reportHTML(kind, r){
+  const bits = [];
+  if (r.inserted) bits.push(`${r.inserted} inserted`);
+  if (r.updated) bits.push(`${r.updated} updated`);
+  if (r.skipped_duplicates) bits.push(`${r.skipped_duplicates} already recorded`);
+  if (r.placeholder_holdings_created.length)
+    bits.push(`placeholder holding created for ${r.placeholder_holdings_created.map(esc).join(", ")} (needs metadata)`);
+  const errs = r.errors.length
+    ? `<div class="twrap" style="margin-top:10px"><table class="ptable">
+         <thead><tr><th>Row</th><th>Problem</th></tr></thead><tbody>
+         ${r.errors.map(e=>`<tr><td>${e.row}</td><td class="wraptext">${esc(e.message)}</td></tr>`).join("")}
+       </tbody></table></div>` : "";
+  return `<div class="sec" style="margin-top:22px">${kind} <small>${esc(r.file)} · ${r.parsedRows} rows read · ${r.durationMs}ms</small></div>
+    <div class="panel">${bits.join(" · ") || "nothing to change"}
+      ${r.errors.length ? `<br><b style="color:var(--down)">${r.errors.length} row(s) rejected:</b>` : ""}
+    </div>${errs}`;
+}
+async function savePermanently(){
+  const jobs = [];
+  if (picked.h) jobs.push(["holdings", picked.h, "Holdings import"]);
+  if (picked.t) jobs.push(["trades", picked.t, "Trades import"]);
+  if (!jobs.length){ alert("Pick a holdings or trades file first."); return; }
+  if (!confirm(`Upload ${jobs.map(j=>j[0]).join(" and ")} to the backend and save permanently?\n\n` +
+               `Trades are appended (duplicates ignored); holdings update metadata without touching ` +
+               `trade history. There is no undo button in the app — clear the Drive folder to wipe it later.`)) return;
+
+  const msg = document.getElementById("msg"), preview = document.getElementById("preview");
+  msg.className = "msg ok"; msg.textContent = "Uploading…";
+  let html = "";
+  try{
+    for (const [kind, file, label] of jobs){
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      html += reportHTML(label, await API.post(`/api/import/${kind}`, fd));
+    }
+  }catch(e){
+    msg.className = "msg err";
+    msg.textContent = "Import failed: " + e.message;
+    return;
+  }
+  preview.innerHTML = html;
+  preview.style.display = "block";
+  msg.className = "msg ok";
+  msg.textContent = "Saved permanently. Dashboard refreshed.";
+  picked.h = picked.t = null;
+  document.getElementById("file-h").value = ""; document.getElementById("file-t").value = "";
+  await refresh();          // no page reload -- every screen re-reads the backend
+}
+
+/* ================= BOOT ================= */
+async function refresh(){ await store.load(ALL); }
+store.subscribe(renderAll);
 for (const slot of ["h","t"]){
   const dz = document.getElementById("drop-"+slot);
-  document.getElementById("file-"+slot).addEventListener("change", e=>{ if(e.target.files[0]) handleFile(e.target.files[0], slot); });
+  document.getElementById("file-"+slot).addEventListener("change", e=>{ if(e.target.files[0]) chooseFile(e.target.files[0], slot); });
   ["dragover","dragenter"].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault();dz.classList.add("over");}));
   ["dragleave","drop"].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault();dz.classList.remove("over");}));
-  dz.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0], slot); });
+  dz.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) chooseFile(e.dataTransfer.files[0], slot); });
 }
-renderGh();           // connect panel (never re-rendered by renderAll)
-loadBook();           // human data: weights, targets, theses
-loadSignals();        // machine data: prices, z-scores
-setInterval(loadSignals, 15*60*1000); // refresh every 15 min while page open
+refresh();
+setInterval(refresh, 15*60*1000);   // same cadence the signal feed used to poll at
 </script>
 </body>
 </html>

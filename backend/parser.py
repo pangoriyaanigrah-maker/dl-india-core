@@ -18,7 +18,9 @@ import re
 import openpyxl
 
 VALID_SIDES = {"Buy", "Sell"}
+VALID_CF_TYPES = {"Contribution", "Withdrawal"}
 HEADER_KEYS = {"ticker", "nseticker", "symbol", "company"}
+CASHFLOW_HEADER_KEYS = {"date", "type"}
 
 
 class ImportError_(ValueError):
@@ -79,6 +81,13 @@ def side(raw) -> str:
     return s
 
 
+def cf_type(raw) -> str:
+    s = str(raw or "").strip().capitalize()
+    if s not in VALID_CF_TYPES:
+        raise ImportError_(f"Type must be Contribution or Withdrawal, got {raw!r}.")
+    return s
+
+
 def positive(raw, label) -> float:
     v = num(raw)
     if v is None:
@@ -105,6 +114,7 @@ def holdings_columns(header) -> dict:
         "industry": column(header, "industry", "subsector", "theme"),
         "analyst": column(header, "analyst"),
         "tp": column(header, "target", "targetprice", "tp"),
+        "qty": column(header, "qty", "quantity", "shares", "sharesheld"),
         "wt": column(header, "weight", "wt"),
         "fullwt": column(header, "fullweight", "fullwt", "targetweight"),
         "addlvl": column(header, "addlevel", "addlvl", "addprice"),
@@ -134,8 +144,20 @@ def trades_columns(header) -> dict:
     return col
 
 
+def cashflow_columns(header) -> dict:
+    col = {
+        "date": column(header, "date"),
+        "type": column(header, "type"),
+        "amount": column(header, "amount", "value"),
+        "note": column(header, "note", "notes", "comment", "comments"),
+    }
+    if any(col[n] < 0 for n in ("date", "type", "amount")):
+        raise ImportError_("Cashflows file needs Date, Type and Amount columns.")
+    return col
+
+
 # -------------------------------------------------------------- sheets
-def rows_from(data: bytes, filename: str, sheet: str) -> list[list]:
+def rows_from(data: bytes, filename: str, sheet: str, header_keys=HEADER_KEYS) -> list[list]:
     """-> rows starting AT the header row."""
     if filename.lower().endswith(".csv"):
         rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace"))))
@@ -153,9 +175,9 @@ def rows_from(data: bytes, filename: str, sheet: str) -> list[list]:
     if not rows:
         raise ImportError_("Empty file.")
     for i, r in enumerate(rows):
-        if any(norm(c) in HEADER_KEYS for c in (r or [])):
+        if any(norm(c) in header_keys for c in (r or [])):
             return rows[i:]
-    raise ImportError_("No header row found — need a Ticker, Symbol or Company column.")
+    raise ImportError_(f"No header row found — need a {' or '.join(sorted(header_keys))} column.")
 
 
 def _scale(body, col) -> float:
@@ -195,6 +217,7 @@ def parse_holdings(data: bytes, filename: str) -> tuple[list[dict], list[dict]]:
             "co": (str(g(r, col["co"]) or tk).strip() or None),
             "sector": g(r, col["sector"]), "industry": g(r, col["industry"]),
             "analyst": g(r, col["analyst"]), "tp": num(g(r, col["tp"])),
+            "qty": num(g(r, col["qty"])),
             "wt": wt, "fullWt": full, "addLvl": num(g(r, col["addlvl"])),
             "yfSymbol": str(yf).strip() if yf else None,
             "conv": g(r, col["conv"]),
@@ -230,6 +253,31 @@ def parse_trades(data: bytes, filename: str) -> tuple[list[dict], list[dict]]:
     return out, errors
 
 
+def parse_cashflows(data: bytes, filename: str) -> tuple[list[dict], list[dict]]:
+    """Money moving in or out of the book from outside -- the Principal
+    funding it or pulling money out. Never a trade: buying/selling a stock
+    moves value between cash and a position, it doesn't change the total."""
+    rows = rows_from(data, filename, "Cashflows", header_keys=CASHFLOW_HEADER_KEYS)
+    col = cashflow_columns(rows[0])
+    g = lambda r, c: (r[c] if 0 <= c < len(r) else None)  # noqa: E731
+
+    out, errors = [], []
+    body = [r for r in rows[1:] if g(r, col["date"]) or g(r, col["type"])]
+    for i, r in enumerate(body, start=1):
+        try:
+            out.append({
+                "date": trade_date(g(r, col["date"])).isoformat(),
+                "type": cf_type(g(r, col["type"])),
+                "amount": positive(g(r, col["amount"]), "Amount"),
+                "note": str(g(r, col["note"])) if g(r, col["note"]) else None,
+            })
+        except ImportError_ as e:
+            errors.append({"row": i, "message": str(e)})
+    if not out:
+        raise ImportError_("No valid cashflow rows found.")
+    return out, errors
+
+
 def merge_trades(existing: list[dict], incoming: list[dict]) -> tuple[list[dict], int, int]:
     """Trades are a ledger, not a snapshot: a new file ADDS to what is
     already recorded. Deduped on (date, ticker, side, qty, price) so
@@ -241,3 +289,53 @@ def merge_trades(existing: list[dict], incoming: list[dict]) -> tuple[list[dict]
     seen = {key(t) for t in existing}
     added = [t for t in incoming if key(t) not in seen]
     return existing + added, len(added), len(incoming) - len(added)
+
+
+def merge_cashflows(existing: list[dict], incoming: list[dict]) -> tuple[list[dict], int, int]:
+    """Same ledger semantics as merge_trades: a new file adds to what's
+    already recorded, deduped on (date, type, amount) so a re-upload of
+    the same file is a no-op."""
+    key = lambda c: (c["date"], c["type"], c["amount"])  # noqa: E731
+    seen = {key(c) for c in existing}
+    added = [c for c in incoming if key(c) not in seen]
+    return existing + added, len(added), len(incoming) - len(added)
+
+
+# --------------------------------------------------------------- export
+# The reverse direction: current book -> a downloadable .xlsx in the same
+# shape holdings_columns()/trades_columns() read. Weight/FullWeight are
+# written back out as percent numbers (2.5, not 0.025) to match the file
+# format the app already expects on re-upload.
+def to_holdings_xlsx(holdings: list[dict]):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Portfolio"
+    ws.append(["Ticker", "Company", "Sector", "Industry", "Analyst", "Qty", "Weight",
+               "FullWeight", "Target", "AddLevel", "Conviction", "Thesis", "Strategy", "YfSymbol"])
+    for h in holdings:
+        ws.append([h.get("tk"), h.get("co"), h.get("sector"), h.get("industry"), h.get("analyst"),
+                   h.get("qty"), (h.get("wt") or 0) * 100, (h.get("fullWt") or 0) * 100,
+                   h.get("tp"), h.get("addLvl"), h.get("conv"), h.get("thesis"),
+                   h.get("strategy"), h.get("yfSymbol")])
+    return wb
+
+
+def to_trades_xlsx(trades: list[dict]):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Trades"
+    ws.append(["Date", "Ticker", "Side", "Qty", "Price", "Costs"])
+    for t in trades:
+        ws.append([t.get("date"), t.get("tk"), t.get("side"), t.get("qty"),
+                   t.get("price"), t.get("costs")])
+    return wb
+
+
+def to_cashflows_xlsx(cashflows: list[dict]):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cashflows"
+    ws.append(["Date", "Type", "Amount", "Note"])
+    for c in cashflows:
+        ws.append([c.get("date"), c.get("type"), c.get("amount"), c.get("note")])
+    return wb

@@ -39,13 +39,14 @@ def main():
     # empty workbook, so anything that opens it sees a valid file rather
     # than a zero-byte one.
     import openpyxl
-    for name, sheet in ((drive.HOLDINGS_XLSX, "Portfolio"), (drive.TRADES_XLSX, "Trades")):
+    for name, sheet in ((drive.HOLDINGS_XLSX, "Portfolio"), (drive.TRADES_XLSX, "Trades"),
+                        (drive.CASHFLOWS_XLSX, "Cashflows")):
         wb = openpyxl.Workbook()
         wb.active.title = sheet
         wb.active["A1"] = "placeholder — replaced on your first import"
         wb.save(OUT / name)
 
-    names = drive.JSON_FILES + [drive.HOLDINGS_XLSX, drive.TRADES_XLSX]
+    names = drive.JSON_FILES + [drive.HOLDINGS_XLSX, drive.TRADES_XLSX, drive.CASHFLOWS_XLSX]
     print(f"wrote {len(names)} files to {OUT}\n")
     for n in names:
         print(f"  {n}")

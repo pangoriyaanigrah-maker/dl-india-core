@@ -8,7 +8,7 @@ Four operations, which is all a single-user dashboard needs:
     write_bytes(name, ...) replace an uploaded .xlsx
 
 Credentials, in order:
-  1. GOOGLE_SERVICE_ACCOUNT_JSON   the JSON key itself (for Vercel/Render/etc)
+  1. GOOGLE_SERVICE_ACCOUNT_JSON   the JSON key itself (for a hosted backend, e.g. Render)
   2. GOOGLE_APPLICATION_CREDENTIALS or ./service-account.json  (local dev)
   3. DRIVE_LOCAL_DIR               a plain folder, no Google at all
 
@@ -16,8 +16,11 @@ Option 3 exists so the app runs, and the tests run, without a service
 account. It is the same four operations against a directory -- about ten
 lines -- and without it nothing here could be exercised at all.
 
-Nothing is cached. Drive is the single source of truth; a stale copy in
-process memory is how two tabs start disagreeing.
+Reads are memoised for a few seconds, and every write clears it. This is
+not a caching layer: one page load asks six endpoints for the SAME
+dashboard.json, and downloading 47KB six times over made the page take ten
+seconds. The window is short enough that Drive stays the source of truth --
+after a write the next read always goes back to Drive.
 """
 from __future__ import annotations
 
@@ -25,10 +28,24 @@ import io
 import json
 import logging
 import os
-import shutil
+import threading
+import time
 from pathlib import Path
 
 log = logging.getLogger("dl.drive")
+
+# Load .env here rather than in main.py: check_drive.py and daily_update.py
+# import this module directly and need the same settings, and one of them
+# forgetting to load it is exactly how "works for me" bugs start.
+try:
+    from dotenv import load_dotenv
+
+    for _p in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+        if _p.exists():
+            load_dotenv(_p)
+            break
+except ImportError:      # optional: real env vars work on their own
+    pass
 
 FOLDER_NAME = os.environ.get("DRIVE_FOLDER_NAME", "Portfolio")
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -36,13 +53,13 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 HOLDINGS_XLSX = "holdings.xlsx"
 TRADES_XLSX = "trades.xlsx"
+CASHFLOWS_XLSX = "cashflows.xlsx"
 PORTFOLIO_JSON = "portfolio.json"
 DASHBOARD_JSON = "dashboard.json"
 SIGNALS_JSON = "signals.json"
 METADATA_JSON = "metadata.json"
-HISTORY_JSON = "history.json"
 
-JSON_FILES = [PORTFOLIO_JSON, DASHBOARD_JSON, SIGNALS_JSON, METADATA_JSON, HISTORY_JSON]
+JSON_FILES = [PORTFOLIO_JSON, DASHBOARD_JSON, SIGNALS_JSON, METADATA_JSON]
 
 
 class DriveError(RuntimeError):
@@ -53,6 +70,8 @@ class DriveError(RuntimeError):
 # --------------------------------------------------------------- backends
 class LocalStore:
     """DRIVE_LOCAL_DIR backend. Same four operations against a folder."""
+
+    credentials = None   # no Google API here -- sheets.py checks this to skip Sheets sync
 
     def __init__(self, root: str):
         self.root = Path(root).expanduser().resolve() / FOLDER_NAME
@@ -93,14 +112,35 @@ class LocalStore:
 
 
 class DriveStore:
-    """Google Drive backend, via a service account."""
+    """Google Drive backend, via a service account.
+
+    One client PER THREAD, not one shared client behind a lock. The first
+    version of this class built a single googleapiclient Resource and
+    guarded every call with a threading.Lock, because the underlying
+    httplib2.Http transport is not thread-safe and FastAPI runs sync
+    endpoints in a threadpool -- sharing one connection across threads
+    corrupted it and surfaced as "[SSL: WRONG_VERSION_NUMBER]". The lock
+    fixed the crash but serialised every Drive call the app ever makes,
+    including calls touching completely unrelated files, turning a save
+    (five or six real network round trips) into a ~20s wait. build() does
+    no network I/O -- it is a local object built from a static discovery
+    document -- so giving each thread its own costs one extra object, not
+    an extra request, and lets unrelated files transfer in parallel again.
+    """
 
     def __init__(self, creds):
-        from googleapiclient.discovery import build
-
-        self.svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+        self._creds = creds
+        self._local = threading.local()
         self.folder_id = None
         self._ids: dict[str, str] = {}
+        self._ids_lock = threading.Lock()   # guards the dict only, never held during I/O
+
+    @property
+    def svc(self):
+        if not hasattr(self._local, "svc"):
+            from googleapiclient.discovery import build
+            self._local.svc = build("drive", "v3", credentials=self._creds, cache_discovery=False)
+        return self._local.svc
 
     # -- helpers -----------------------------------------------------
     def _q(self, **kw):
@@ -134,29 +174,45 @@ class DriveStore:
         """One listing instead of one query per file. Startup used to make
         six round trips before serving anything, which on a serverless host
         is paid again on every cold start."""
-        self._ids = {f["name"]: f["id"]
-                     for f in self._q(q=f"'{self.folder_id}' in parents and trashed=false")}
-        self._primed = True
-        return set(self._ids)
+        ids = {f["name"]: f["id"]
+               for f in self._q(q=f"'{self.folder_id}' in parents and trashed=false")}
+        with self._ids_lock:
+            self._ids = ids
+            self._primed = True
+        return set(ids)
+
+    @property
+    def credentials(self):
+        return self._creds
+
+    def file_id(self, name):
+        """Public wrapper -- sheets.py needs the Drive file id of a native
+        Google Sheet (same id space as spreadsheetId) without reaching into
+        the underlying cache directly."""
+        return self._file_id(name)
 
     def _file_id(self, name, refresh=False):
-        if not refresh and name in self._ids:
-            return self._ids[name]
-        # After prime(), a name that is absent from the cache is absent from
-        # the folder -- no point asking Drive again.
-        if not refresh and getattr(self, "_primed", False):
-            return None
+        if not refresh:
+            with self._ids_lock:
+                if name in self._ids:
+                    return self._ids[name]
+                # After prime(), absent from the cache means absent from
+                # the folder -- no point asking Drive again.
+                if getattr(self, "_primed", False):
+                    return None
         found = self._q(q=f"name='{name}' and '{self.folder_id}' in parents and trashed=false")
-        if not found:
-            self._ids.pop(name, None)
-            return None
-        self._ids[name] = found[0]["id"]
-        return self._ids[name]
+        with self._ids_lock:
+            if not found:
+                self._ids.pop(name, None)
+                return None
+            self._ids[name] = found[0]["id"]
+            return self._ids[name]
 
     # -- the four operations -----------------------------------------
     def exists(self, name):
         if getattr(self, "_primed", False):
-            return name in self._ids
+            with self._ids_lock:
+                return name in self._ids
         return self._file_id(name, refresh=True) is not None
 
     def read_bytes(self, name):
@@ -191,16 +247,17 @@ class DriveStore:
         fid = self._file_id(name)
         try:
             if fid:
-                # update() replaces content in place: the old version stays
-                # readable until the new one lands, so a failed upload
-                # leaves the previous file intact rather than a truncated one.
+                # update() replaces content in place: the old version
+                # stays readable until the new one lands, so a failed
+                # upload leaves the previous file intact, not truncated.
                 self.svc.files().update(fileId=fid, media_body=media).execute()
             else:
                 created = self.svc.files().create(
                     body={"name": name, "parents": [self.folder_id]},
                     media_body=media, fields="id", supportsAllDrives=True,
                 ).execute()
-                self._ids[name] = created["id"]
+                with self._ids_lock:
+                    self._ids[name] = created["id"]
         except Exception as e:
             # The one failure worth naming precisely. A service account has
             # no storage of its own, so it can modify a file you own but
@@ -296,21 +353,63 @@ def _empty(name):
     if name == METADATA_JSON:
         return {"holdingsUpdated": None, "tradesUpdated": None,
                 "signalsUpdated": None, "holdings": 0, "trades": 0, "sourceFiles": {}}
-    if name == HISTORY_JSON:
-        return {"points": [], "count": 0, "sectors": []}
     if name == SIGNALS_JSON:
         return {"asof": None, "index": "the index", "signals": {},
-                "bench_sect": {}, "bench_size": {}, "errors": []}
+                "bench_sect": {}, "bench_size": {}, "bench_index_level": {}, "errors": []}
     return {}
 
 
-# convenience passthroughs
+# --------------------------------------------------------------- memo
+# A page load asks six endpoints for the same dashboard.json within a few
+# hundred milliseconds. Without this that is six 47KB downloads, serialised
+# behind the lock, and the page took ~10s. TTL is deliberately tiny and any
+# write clears the whole memo, so Drive remains the source of truth.
+MEMO_TTL = float(os.environ.get("DRIVE_MEMO_TTL", "5"))
+_memo: dict[str, tuple[float, object]] = {}
+_memo_lock = threading.Lock()
+
+
+_inflight: dict[str, threading.Lock] = {}
+
+
+def _memo_get(name):
+    with _memo_lock:
+        hit = _memo.get(name)
+        if hit and (time.monotonic() - hit[0]) < MEMO_TTL:
+            return hit[1]
+        return None
+
+
+def invalidate():
+    with _memo_lock:
+        _memo.clear()
+
+
 def read_json(name):
-    return store().read_json(name)
+    """Single-flight: eight endpoints ask for dashboard.json at once on
+    every page load. Without this they all miss the memo (none has been
+    populated yet), all eight hit Drive, and serialised behind the API lock
+    that took ~10s and blew the client's timeout. Now the first caller
+    fetches and the rest wait on it, then read the memo it filled."""
+    hit = _memo_get(name)
+    if hit is None:
+        with _memo_lock:
+            gate = _inflight.setdefault(name, threading.Lock())
+        with gate:
+            hit = _memo_get(name)          # filled while we waited?
+            if hit is None:
+                hit = store().read_json(name)
+                if hit is not None:
+                    with _memo_lock:
+                        _memo[name] = (time.monotonic(), hit)
+    if hit is None:
+        return None
+    return json.loads(json.dumps(hit))     # a copy, never the memo itself
 
 
 def write_json(name, obj):
     store().write_json(name, obj)
+    invalidate()          # the next read must see what was just written
 
 
 def read_bytes(name):
@@ -319,3 +418,4 @@ def read_bytes(name):
 
 def write_bytes(name, data, mime="application/octet-stream"):
     store().write_bytes(name, data, mime)
+    invalidate()

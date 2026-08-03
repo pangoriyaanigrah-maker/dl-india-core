@@ -11,7 +11,6 @@ Portfolio/
     dashboard.json     every computed screen, in one file
     signals.json       market data from the evening job
     metadata.json      what changed and when
-    history.json       one snapshot per day
 ```
 
 ## Why the files are split this way
@@ -85,27 +84,29 @@ real storage state, not just that the process is alive.
 
 ## Frontend
 
-`index.html` is static; deploy the repo root to Vercel. Because the API
-lives elsewhere, tell the page where:
+`index.html` is static; it's hosted on GitHub Pages. Because the API lives
+elsewhere, `config.js` tells the page where to find it:
 
-```html
-<script>window.API_BASE = "https://your-api.onrender.com";</script>
+```js
+window.API_BASE = "https://your-api.onrender.com";
 ```
 
-Add that line before the main `<script>` block. Leave it unset for
-same-origin (a local `uvicorn` serving both).
+Edit that one line in `config.js` — it's a plain static file, so no
+rebuild, no redeploy of `index.html` itself. Leave it as `""` for
+same-origin (a local `uvicorn` serving both the API and the page). A
+`?api=https://...` query param overrides it for one visit, handy for
+testing a new backend before committing to it in `config.js`.
 
-Set `CORS_ORIGINS` on the backend to your Vercel URL once deployed.
+Set `CORS_ORIGINS` on the backend to your GitHub Pages URL once deployed.
 
 ## The evening job
 
 ```bash
-python scripts/daily_update.py                # fetch, recalculate, snapshot
+python scripts/daily_update.py                # fetch, recalculate
 python scripts/daily_update.py --recalc-only  # no network
 ```
 
-Fetches market data, writes `signals.json`, recomputes every screen and
-appends a history point.
+Fetches market data, writes `signals.json`, and recomputes every screen.
 
 **Failure policy:** nothing is written until the fetch returns real data.
 A crash, a network failure or an empty feed leaves every file exactly as
@@ -131,4 +132,4 @@ today", because writing it would blank every price on the dashboard.
 | `could not create the Portfolio folder` | Drive API not enabled on the project. |
 | Files upload but you cannot find them | No `DRIVE_FOLDER_ID` — they are in the service account's own Drive. Share a folder and set the ID. |
 | `403` from Drive | The folder is not shared with the service account's email, or not as Editor. |
-| CORS errors in the browser | `CORS_ORIGINS` does not include your Vercel URL. |
+| CORS errors in the browser | `CORS_ORIGINS` does not include your GitHub Pages URL. |

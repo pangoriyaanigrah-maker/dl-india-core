@@ -151,10 +151,10 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
 .msg.ok{display:block;color:var(--up);background:rgba(67,192,141,.1);border:1px solid rgba(67,192,141,.35)}
 .msg.err{display:block;color:var(--down);background:rgba(228,96,78,.1);border:1px solid rgba(228,96,78,.35)}
 .btnrow{display:flex;gap:12px;margin-top:18px;flex-wrap:wrap}
-button.act{font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.1em;
+.act{font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.1em;
   text-transform:uppercase;padding:11px 22px;border-radius:8px;cursor:pointer;border:1px solid var(--saffron);
-  background:var(--saffron);color:var(--ink)}
-button.ghost{background:none;color:var(--saffron)}
+  background:var(--saffron);color:var(--ink);text-decoration:none;display:inline-block}
+.ghost{background:none;color:var(--saffron)}
 #preview{display:none}
 #preview .twrap{margin-top:14px}
 /* ---------- github connect (Import tab) ---------- */
@@ -173,14 +173,6 @@ button.ghost{background:none;color:var(--saffron)}
   margin-top:14px;line-height:1.7;display:none}
 .notice.on{display:block}
 .notice.bad{color:var(--down);background:rgba(228,96,78,.1);border:1px solid rgba(228,96,78,.35)}
-/* ---------- history charts ---------- */
-.chart{width:100%;height:auto;display:block;overflow:visible}
-.chart .grid{stroke:var(--line);stroke-width:1}
-.chart .axlbl{font-family:'IBM Plex Mono';font-size:9px;fill:var(--faint)}
-.chart .line{fill:none;stroke:var(--saffron);stroke-width:2}
-.chart .area{fill:var(--saffron);opacity:.10}
-.chart .dot{fill:var(--saffron)}
-.hint{font-family:'IBM Plex Mono';font-size:11px;color:var(--faint);line-height:1.8;margin-top:8px}
 /* Backend status banner: hidden entirely unless loading or errored, so the
    healthy page looks exactly as it did before. */
 #apibanner{font-family:'IBM Plex Mono';font-size:12px;line-height:1.7;padding:10px 14px;
@@ -218,7 +210,6 @@ button.ghost{background:none;color:var(--saffron)}
   <button class="tab" id="t-risk" onclick="showView('risk')">Risk</button>
   <button class="tab" id="t-perf" onclick="showView('perf')">Performance</button>
   <button class="tab" id="t-posn" onclick="showView('posn')">Positions</button>
-  <button class="tab" id="t-hist" onclick="showView('hist')">History</button>
   <button class="tab" id="t-imp" onclick="showView('imp')">Import</button>
 </div>
 <div id="apibanner"></div>
@@ -233,28 +224,51 @@ button.ghost{background:none;color:var(--saffron)}
   <div id="rows"></div>
   <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs the index constituents named on the Exposures tab, fetched from NSE nightly.</div>
 </div>
-<div class="view" id="v-hist"><div id="hist-body"></div></div>
 <div class="view" id="v-imp">
   <div class="drops">
     <div class="drop" id="drop-h" onclick="pick('h')">
       <div class="big">Holdings file</div>
-      <div class="sm">DL template <b>.xlsx</b> (Portfolio sheet)<br>or CSV: Ticker, Company, Sector, Industry, Analyst, Weight, FullWeight, Target, AddLevel, Conviction, Thesis, Strategy<br>Optional <b>YfSymbol</b> — only if a ticker won't price on .NS or .BO</div>
+      <div class="sm">DL template <b>.xlsx</b> (Portfolio sheet)<br>or CSV: Ticker, Company, Sector, Industry, Analyst, Target, Qty, Weight, FullWeight, AddLevel, Conviction, Thesis, Strategy<br><b>Qty</b> — shares currently held; sizes unrealized P&L. Optional <b>YfSymbol</b> — only if a ticker won't price on .NS or .BO</div>
     </div>
     <div class="drop" id="drop-t" onclick="pick('t')">
       <div class="big">Trades file</div>
       <div class="sm">DL template <b>.xlsx</b> (Trades sheet)<br>or CSV: Date, Ticker, Side, Qty, Price, Costs</div>
     </div>
+    <div class="drop" id="drop-cf" onclick="pick('cf')">
+      <div class="big">Cashflows file <small style="text-transform:none;letter-spacing:0">(optional)</small></div>
+      <div class="sm">DL template <b>.xlsx</b> (Cashflows sheet)<br>or CSV: Date, Type, Amount, Note<br>
+      <b>Type</b> is Contribution or Withdrawal — money moving in/out of the book from outside it. Only
+      needed when that actually happens; not required on every save.</div>
+    </div>
   </div>
   <input type="file" id="file-h" accept=".xlsx,.csv" style="display:none">
   <input type="file" id="file-t" accept=".xlsx,.csv" style="display:none">
+  <input type="file" id="file-cf" accept=".xlsx,.csv" style="display:none">
   <div class="msg" id="msg"></div>
   <div id="preview"></div>
   <div class="sec" style="margin-top:26px">Save permanently <small>nothing is written until you click this</small></div>
   <div class="panel" style="margin-bottom:18px">
-    Picking a file does not upload it. Choose the holdings file, the trades file, or both, then click
-    below: the backend validates, imports and reports exactly what changed.
+    Picking a file does not upload it. Choose both the holdings file and the trades file (cashflows is
+    optional, only when capital actually moved), then click below: the backend validates, imports and
+    reports exactly what changed.
     <div class="btnrow"><button class="act" onclick="savePermanently()">Save Permanently</button>
       <button class="act ghost" onclick="resetImport()">Clear</button></div>
+  </div>
+  <div class="sec" style="margin-top:26px">Download current data <small>the book as it stands now, not the last raw upload</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    Every holding on record (including one held at a zero full-target weight, still being wound down),
+    the complete trade ledger, and the capital contribution/withdrawal ledger, exported in the same
+    column layout the importer reads — edit and re-upload if you want.
+    <div class="btnrow"><a class="act ghost" id="dl-holdings" download>Download holdings.xlsx</a>
+      <a class="act ghost" id="dl-trades" download>Download trades.xlsx</a>
+      <a class="act ghost" id="dl-cashflows" download>Download cashflows.xlsx</a></div>
+    <div class="btnrow" style="margin-top:12px;align-items:center">
+      <label style="font-family:'IBM Plex Mono';font-size:11px;color:var(--dim)">Trades/cashflows from
+        <input type="date" id="dl-from" onchange="updateDateFilteredLinks()" style="font-family:inherit;background:var(--ink);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 6px;margin-left:4px"></label>
+      <label style="font-family:'IBM Plex Mono';font-size:11px;color:var(--dim)">to
+        <input type="date" id="dl-to" onchange="updateDateFilteredLinks()" style="font-family:inherit;background:var(--ink);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 6px;margin-left:4px"></label>
+      <button class="act ghost" onclick="document.getElementById('dl-from').value='';document.getElementById('dl-to').value='';updateDateFilteredLinks()">Clear</button>
+    </div>
   </div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
@@ -264,7 +278,7 @@ button.ghost{background:none;color:var(--saffron)}
     Signal feed is live: a GitHub Actions cron (build_signals.py) hits Yahoo Finance nightly for
     prices, momentum and fundamentals, computes z-scores across the constituents of the
     benchmark index (NSE's own list, re-fetched each run), and writes
-    signals.json. Re-uploading a holdings file here replaces weights/targets/theses only — it does
+    signals.json. Re-uploading a holdings file here replaces weights/targets/theses/quantities only — it does
     not touch the signal feed.<br>
     <b>Saving is manual, on purpose.</b> Picking a file writes nothing;
     <b>Save Permanently</b> is the one action that uploads it — with a confirmation naming exactly
@@ -274,11 +288,12 @@ button.ghost{background:none;color:var(--saffron)}
 <script src="config.js"></script>
 <script>
 /* ================= BACKEND LOCATION =================
-   The dashboard is deployed to Vercel and the API lives elsewhere, so the
-   two are different origins. Set window.API_BASE before this script (or
+   The dashboard is hosted on GitHub Pages and the API lives elsewhere, so
+   the two are different origins. Set window.API_BASE before this script (or
    edit the fallback) to point at the backend; leaving it empty means
    same-origin, which is what a local `uvicorn main:app` gives you. */
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
+document.getElementById("dl-holdings").href = API_BASE + "/api/export/holdings";
 
 /* ================= API CLIENT =================
    Every backend call goes through here: timeout, retry with backoff,
@@ -327,7 +342,7 @@ const API = {
 const ENDPOINT = {
   dashboard: "/api/dashboard", portfolio: "/api/portfolio", risk: "/api/risk",
   performance: "/api/performance", exposure: "/api/exposure",
-  positions: "/api/positions", signals: "/api/signals", history: "/api/history"
+  positions: "/api/positions", signals: "/api/signals", nav: "/api/nav"
 };
 const ALL = Object.keys(ENDPOINT);
 
@@ -358,18 +373,45 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = {
   pct:(x,s=1)=> x==null ? "—" : (x>0&&s?"+":"") + (x*100).toFixed(1) + "%",
-  w:(x)=> x==null ? "—" : (x*100).toFixed(0)+"%",
+  w:(x)=> x==null ? "—" : (x*100).toFixed(1)+"%",
   z:(v)=> v==null ? "—" : (v>0?"+":"") + v.toFixed(2) + "σ",
   inr:(v)=> v==null ? "—" : (v<0?"−₹":"₹") + Math.round(Math.abs(v)).toLocaleString("en-IN"),
-  lakh:(v)=> v==null ? "—" : (v<0?"−":"") + "₹" + (Math.abs(v)/100000).toFixed(1) + "L",
   d:(s)=> { if(!s) return "—"; const dt=new Date(s);
     return isNaN(dt) ? "—" : dt.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"}); }
 };
+/* Independent per-row rounding can miss its total by a tenth of a point --
+   three 33.33% rows display as 33.3+33.3+33.3=99.9, not 100.0 -- which
+   reads as sloppy on a report reviewed line by line. Largest-remainder
+   rounding: floor every share, then hand the leftover units to whichever
+   values were closest to rounding up, until the displayed total is exact. */
+function reconcilePercents(fractions, decimals=1, targetTotal=100){
+  const scale = 10 ** decimals;
+  const floors = fractions.map(f => Math.floor(f*100*scale));
+  const remainder = Math.round(targetTotal*scale) - floors.reduce((a,b)=>a+b, 0);
+  const order = fractions.map((f,i)=>({i, frac: f*100*scale - floors[i]})).sort((a,b)=>b.frac-a.frac);
+  const out = floors.slice();
+  for (let k = 0; k < remainder && k < order.length; k++) out[order[k].i]++;
+  return out.map(v => (v/scale).toFixed(decimals));
+}
 function showView(v){
-  for (const k of ["ov","exp","risk","perf","posn","hist","imp"]){
+  for (const k of ["ov","exp","risk","perf","posn","imp"]){
     document.getElementById("v-"+k).classList.toggle("active", k===v);
     document.getElementById("t-"+k).classList.toggle("active", k===v);
   }
+}
+/* ================= DATE-FILTERED EXPORTS =================
+   Trades/cashflows carry a real date per row, so the download links can
+   be scoped to a range straight from the live book -- no separate
+   archive/version store needed. Holdings has no date dimension (it's a
+   current snapshot), so it always downloads in full. */
+function updateDateFilteredLinks(){
+  const from = document.getElementById("dl-from").value, to = document.getElementById("dl-to").value;
+  const q = new URLSearchParams();
+  if (from) q.set("from_date", from);
+  if (to) q.set("to_date", to);
+  const qs = q.toString() ? "?" + q.toString() : "";
+  document.getElementById("dl-trades").href = API_BASE + "/api/export/trades" + qs;
+  document.getElementById("dl-cashflows").href = API_BASE + "/api/export/cashflows" + qs;
 }
 /* Bar width as a % of the axis -- visualisation geometry, not a business
    figure. The values themselves come from the backend. */
@@ -380,7 +422,7 @@ const barList = (pairs) => {
     return `<div class="plbar"><div>${esc(k)}</div>
       <div class="axis"><div class="zero"></div>
         <div class="bar" style="left:${left}%;width:${w}%;background:${v>=0?"var(--up)":"var(--down)"}"></div></div>
-      <div class="val ${v>=0?"pos":"neg"}">${fmt.lakh(v)}</div></div>`;
+      <div class="val ${v>=0?"pos":"neg"}">${fmt.inr(v)}</div></div>`;
   }).join("");
 };
 const pairsOf = buckets => (buckets||[]).map(b => [b.key, b.pl]);
@@ -409,8 +451,8 @@ function renderHeader(){
 /* ================= RENDER: OVERVIEW ================= */
 function renderOverview(){
   const el = document.getElementById("ov-body");
-  const d = store.data.dashboard, p = store.data.portfolio;
-  if (!d || !p){ el.innerHTML = empty("Loading from backend…"); return; }
+  const d = store.data.dashboard, p = store.data.portfolio, nav = store.data.nav;
+  if (!d || !p || !nav){ el.innerHTML = empty("Loading from backend…"); return; }
   if (!d.holdingsCount){
     el.innerHTML = empty("No holdings yet.<br>Upload a holdings file (and a trades file) on the Import tab.");
     return;
@@ -433,12 +475,36 @@ function renderOverview(){
   el.innerHTML = `
   <div class="stats">
     ${[["Total P&L",fmt.inr(d.overallPL),"after costs · "+fmt.pct(d.overallReturn)+" on gross",d.overallPL>=0?"pos":"neg"],
-       ["Realized",fmt.inr(d.realized),"avg-cost basis",d.realized>=0?"pos":"neg"],
+       ["Realized",fmt.inr(d.realized),"FIFO basis",d.realized>=0?"pos":"neg"],
        ["Unrealized",fmt.inr(d.unrealized),"marked to feed CMPs",d.unrealized>=0?"pos":"neg"],
        ["Equity",fmt.w(d.equityWeight),"of NAV · "+d.holdingsCount+" names",""],
        ["Cash",fmt.w(d.cashWeight),"vs "+fmt.w(C.pendingAdds)+" staged adds",""],
        ["Wtd upside",fmt.pct(d.weightedUpside),"to analyst targets","pos"]]
       .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
+  </div>
+  <div class="sec">Real NAV <small>from actual capital flows and trade cash — a real rupee figure, independent of the weight-based cash plug above</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    <div class="stats">
+      ${[["NAV",fmt.inr(nav.nav),"cash balance + holdings value",""],
+         ["Cash balance",fmt.inr(nav.cashBalance),"contributed − withdrawn − net trade cash",nav.cashBalance>=0?"":"neg"],
+         ["Contributed",fmt.inr(nav.contributed),nav.cashflowCount+" cashflow record"+(nav.cashflowCount===1?"":"s"),""],
+         ["Withdrawn",fmt.inr(nav.withdrawn),"",""],
+         ["Holdings value",fmt.inr(nav.holdingsValue),"qty × CMP, currently held names",""]]
+        .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
+    </div>
+    ${!nav.cashflowCount ? `<div class="foot" style="margin-top:10px">No capital contributions recorded yet — this NAV is trade-cash only.
+      Upload a Cashflows file on the Import tab (at least your initial contribution, dated) to make it meaningful.</div>` : ""}
+    ${nav.unmarkedWeight>0.001 ? `<div class="foot" style="margin-top:4px">${fmt.w(nav.unmarkedWeight)} of holdings valued at last trade price, not a live quote.</div>` : ""}
+    ${nav.xirr!=null ? `
+    <div class="stats" style="margin-top:14px">
+      ${[["XIRR",fmt.pct(nav.xirr),"money-weighted, on your actual contribution dates",nav.xirr>=0?"pos":"neg"],
+         ["Benchmark XIRR",nav.benchXirr!=null?fmt.pct(nav.benchXirr):"—","same dates, same amounts, into the index instead",nav.benchXirr!=null&&nav.benchXirr>=0?"pos":""],
+         ["Alpha",nav.alpha!=null?fmt.pct(nav.alpha):"—","XIRR minus benchmark XIRR",nav.alpha!=null?(nav.alpha>=0?"pos":"neg"):""]]
+        .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
+    </div>
+    ${nav.xirr!=null&&nav.benchXirr==null ? `<div class="foot" style="margin-top:4px">Benchmark XIRR unavailable — a contribution predates the 5-year price history the nightly job keeps, or the benchmark composite hasn't been fetched yet.</div>` : ""}
+    ${nav.spanDays!=null&&nav.spanDays<365 ? `<div class="foot" style="margin-top:4px">Only ${nav.spanDays} days since the first contribution — annualizing compounds a short window's move up to a full year, so this figure can look extreme (correctly) until there's more history to average over.</div>` : ""}
+    ` : `<div class="foot" style="margin-top:10px">XIRR needs at least one dated contribution to solve for a rate — see above.</div>`}
   </div>
   <div class="sec">Composition <small>current vs full build · colour = conviction</small></div>
   <div class="panel compwrap">
@@ -465,8 +531,11 @@ function renderOverview(){
   </div>
   <div class="sec">Insights <small>rule-based reads for the IC — judgement stays human</small></div>
   ${insightHTML(p.insights)}
-  <div class="foot">Realized P&L on full-period average cost. Return is money-weighted — TWR/XIRR would need
-  dated cash flows, which arrive with the trades file. Prices and z-scores come from build_signals.py
+  <div class="foot">Realized P&L is FIFO — each sell books profit against its specific oldest lots, so a
+  later buy never rewrites an earlier sale. "+X% on gross" above is cumulative P&L on capital
+  deployed, not a return — it has no time dimension and gets distorted by trading activity. XIRR
+  in the Real NAV panel (money-weighted, from your actual dated contributions) is the number that
+  answers "what did I actually earn." Prices and z-scores come from build_signals.py
   (Yahoo Finance, refreshed nightly by GitHub Actions). All figures computed by the backend.</div>`;
 }
 
@@ -487,15 +556,19 @@ function renderExposures(){
       <td>${cell(f.highest)}</td>
       <td>${cell(f.lowest)}</td></tr>`;
   }).join("");
-  const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D"};
-  const secRows = e.sectors.map(s=>{
+  const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D", Unclassified:"var(--faint)"};
+  // Reconciled so the displayed column actually sums to 100.0% rather than
+  // drifting a tenth of a point off from rounding each row independently.
+  const secPortfolioPct = reconcilePercents(e.sectors.map(s=>s.portfolio));
+  const secBenchPct = reconcilePercents([...e.sectors.map(s=>s.benchmark), e.notHeld.benchmarkWeight]);
+  const secRows = e.sectors.map((s,i)=>{
     const bwid = Math.min(Math.abs(s.active)*300, 60);
-    return `<tr><td>${esc(s.sector)}</td><td>${(s.portfolio*100).toFixed(1)}%</td><td>${(s.benchmark*100).toFixed(1)}%</td>
+    return `<tr><td>${esc(s.sector)}</td><td>${secPortfolioPct[i]}%</td><td>${secBenchPct[i]}%</td>
       <td class="${s.active>=0?"pos":"neg"}">${fmt.pct(s.active)}
         <span class="actbar" style="width:${bwid}px;background:${s.active>=0?"var(--up)":"var(--down)"}"></span></td>
-      <td class="${s.pl>=0?"pos":"neg"}">${fmt.lakh(s.pl)}</td></tr>`;
+      <td class="${s.pl>=0?"pos":"neg"}">${fmt.inr(s.pl)}</td></tr>`;
   }).join("") + `<tr><td style="color:var(--faint)">Not held (${e.notHeld.count} sectors)</td>
-      <td>0.0%</td><td>${(e.notHeld.benchmarkWeight*100).toFixed(1)}%</td>
+      <td>0.0%</td><td>${secBenchPct[secBenchPct.length-1]}%</td>
       <td class="neg">${fmt.pct(-e.notHeld.benchmarkWeight)}</td><td>—</td></tr>`;
   el.innerHTML = `
   <div class="sec">Factor profile <small>weighted z-scores vs the ${esc(benchName)} cross-section</small></div>
@@ -503,13 +576,20 @@ function renderExposures(){
     <thead><tr><th>Factor</th><th>Book</th><th style="text-align:left">Tilt</th><th>Highest</th><th>Lowest</th></tr></thead>
     <tbody>${factorRows}</tbody>
   </table></div>
-  <div class="sec">Size <small>${e.benchmarkLive?"vs mcap-weighted "+esc(benchName):"vs static placeholder weights"}</small></div>
+  <div class="sec">Size <small>portfolio mix by market cap</small></div>
   <div class="panel" style="margin-bottom:18px">
     <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;margin-bottom:8px">
       ${e.size.map(s=>`<div style="width:${s.portfolio*100}%;background:${sc[s.bucket]}"></div>`).join("")}
+      ${e.sizeUnclassified>0.001?`<div style="width:${e.sizeUnclassified*100}%;background:${sc.Unclassified}"></div>`:""}
     </div>
     <div style="display:flex;gap:14px;font-family:'IBM Plex Mono';font-size:11px;color:var(--dim);flex-wrap:wrap">
-      ${e.size.map(s=>`<span><span class="dot" style="background:${sc[s.bucket]}"></span>${s.bucket} ${(s.portfolio*100).toFixed(0)}% (idx ${(s.benchmark*100).toFixed(0)})</span>`).join("")}
+      ${(()=>{
+        // Reconciled to what's actually classified, not force-summed to
+        // 100 -- sizeUnclassified (no market cap yet) is real and excluded.
+        const pPct = reconcilePercents(e.size.map(s=>s.portfolio), 0, (1-e.sizeUnclassified)*100);
+        return e.size.map((s,i)=>`<span><span class="dot" style="background:${sc[s.bucket]}"></span>${s.bucket} ${pPct[i]}%</span>`).join("");
+      })()}
+      ${e.sizeUnclassified>0.001?`<span style="color:var(--faint)"><span class="dot" style="background:${sc.Unclassified}"></span>Unclassified ${(e.sizeUnclassified*100).toFixed(0)}% (no market cap yet)</span>`:""}
     </div>
   </div>
   <div class="sec">Sector exposure <small>active weight and P&L contribution · benchmark ${e.benchmarkLive?`<b style='color:var(--up)'>LIVE ${esc(benchName)}</b>`:"static placeholder"}</small></div>
@@ -577,10 +657,33 @@ function renderRisk(){
     }).join("")}
     </tbody>
   </table></div>
+  <div class="sec">Liquidity <small>days to exit at ${(r.liquidity.participationRate*100).toFixed(0)}% of average daily volume · the real risk on any thinly-traded name, small-cap or not</small></div>
+  <div class="twrap" style="margin-bottom:18px"><table class="ptable">
+    <thead><tr><th>Ticker</th><th>Wt</th><th>ADV (shares/day)</th><th>Position (shares)</th>
+      <th>Position / ADV</th><th>Days to liquidate</th><th>Tier</th></tr></thead>
+    <tbody>
+    ${r.liquidity.rows.map(l=>{
+      const d = (v,f) => v==null ? `<span style="color:var(--faint)">—</span>` : f(v);
+      const tierClass = l.tier==="Illiquid" ? "neg" : l.tier==="Tight" ? "" : l.tier==="Liquid" ? "pos" : "";
+      return `<tr><td>${esc(l.tk)}</td><td>${fmt.w(l.wt)}</td>
+        <td>${d(l.adv, v=>Math.round(v).toLocaleString("en-IN"))}</td>
+        <td>${d(l.qty, v=>Math.round(v).toLocaleString("en-IN"))}</td>
+        <td>${d(l.positionOverAdv, v=>(v*100).toFixed(2)+"%")}</td>
+        <td>${d(l.daysToLiquidate, v=>(v<0.1&&v>0?v.toFixed(3):v.toFixed(1))+"d")}</td>
+        <td class="${tierClass}">${l.tier || "—"}</td></tr>`;
+    }).join("")}
+    </tbody>
+  </table></div>
   ${insightHTML(r.reads)}
   <div class="foot">Every figure here is historical and descriptive — worst month and max drawdown are
-  what happened, not a forecast. Computed nightly from 5 years of daily closes; beta is against the
-  Nifty 50 on shared trading days. No covariance model: each number is reproducible from the price series.</div>`;
+  what happened, not a forecast. Computed nightly from 5 years of daily closes; beta is against a
+  market-cap-weighted ${esc((r.feed&&r.feed.index)||"benchmark")} composite on shared trading days —
+  large-cap through micro-cap, so a holding of any size has a real peer group, not one fixed slice of
+  the market. No covariance model: each number is reproducible from the price series.
+  Liquidity assumes trading at most ${(r.liquidity.participationRate*100).toFixed(0)}% of a day's average volume without
+  moving the price — a standard conservative convention, not a fitted market-impact model; there is no
+  real bid-ask/order-book data to calibrate one against for a name thin enough to need this.${r.liquidity.unscored ?
+    ` ${r.liquidity.unscored} holding${r.liquidity.unscored===1?"":"s"} could not be scored (no volume data yet).` : ""}</div>`;
 }
 
 /* ================= RENDER: PERFORMANCE ================= */
@@ -612,7 +715,7 @@ function renderPerformance(){
       return `<div class="plbar"><div>${esc(r.tk)}</div>
         <div class="axis"><div class="zero"></div>
           <div class="bar" style="left:${left}%;width:${w}%;background:${r.total>=0?"var(--up)":"var(--down)"}"></div></div>
-        <div class="val ${r.total>=0?"pos":"neg"}">${fmt.lakh(r.total)}</div></div>`;
+        <div class="val ${r.total>=0?"pos":"neg"}">${fmt.inr(r.total)}</div></div>`;
     }).join("")}
   </div>
   <div class="sec">Position detail <small>average-cost basis</small></div>
@@ -641,7 +744,8 @@ function renderPerformance(){
     </tbody>
   </table></div>
   <div class="foot">* ticker not in the price feed — marked at its last trade price.
-  Realized P&L uses full-period average cost, matching the Excel; a buy after a sell restates that sell.
+  Realized P&L is FIFO — each sell is costed against its own oldest lots, so a later buy never
+  rewrites an earlier sale's booked profit. Avg cost is the cost basis of the lots you still hold.
   Return is money-weighted on gross invested — TWR/XIRR would come from the dated cash flows above.</div>`;
 }
 
@@ -689,143 +793,6 @@ function renderPositions(){
   }).join("");
 }
 
-/* ================= RENDER: HISTORY =================
-   Charts are hand-drawn SVG. Phase 4 removed every CDN library and a line
-   chart is not worth adding one back for -- these are ~30 lines of path
-   maths and reuse the dashboard's own palette. Nothing here computes a
-   business figure: the backend's daily snapshots supply every number. */
-function svgLine(points, valueOf, {height = 130, fmtY = v => v, colour = "var(--saffron)"} = {}){
-  const W = 1000, H = height, padL = 52, padR = 8, padT = 10, padB = 20;
-  const vals = points.map(valueOf);
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (lo === hi){ lo -= Math.abs(lo || 1) * 0.1; hi += Math.abs(hi || 1) * 0.1; }
-  const x = i => padL + (points.length < 2 ? (W-padL-padR)/2 : i/(points.length-1)*(W-padL-padR));
-  const y = v => padT + (1 - (v-lo)/(hi-lo)) * (H-padT-padB);
-  const d = points.map((p,i)=>`${i?"L":"M"}${x(i).toFixed(1)},${y(valueOf(p)).toFixed(1)}`).join("");
-  const area = `${d}L${x(points.length-1).toFixed(1)},${H-padB}L${x(0).toFixed(1)},${H-padB}Z`;
-  const ticks = [lo, (lo+hi)/2, hi];
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
-    ${ticks.map(t=>`<line class="grid" x1="${padL}" x2="${W-padR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>
-       <text class="axlbl" x="0" y="${(y(t)+3).toFixed(1)}">${fmtY(t)}</text>`).join("")}
-    <path class="area" d="${area}" style="fill:${colour}"/>
-    <path class="line" d="${d}" style="stroke:${colour}"/>
-    ${points.map((p,i)=>`<circle class="dot" cx="${x(i).toFixed(1)}" cy="${y(valueOf(p)).toFixed(1)}" r="${points.length>60?1.5:3}" style="fill:${colour}"><title>${esc(p.date)} · ${fmtY(valueOf(p))}</title></circle>`).join("")}
-  </svg>`;
-}
-function svgBars(points, valueOf, {height = 110} = {}){
-  const W = 1000, H = height, padL = 52, padR = 8, padT = 8, padB = 20;
-  const vals = points.map(valueOf);
-  const maxAbs = Math.max(...vals.map(Math.abs), 1);
-  const zero = padT + (H-padT-padB)/2;
-  const bw = Math.max(1.5, (W-padL-padR)/Math.max(points.length,1) * 0.65);
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
-    <line class="grid" x1="${padL}" x2="${W-padR}" y1="${zero}" y2="${zero}"/>
-    <text class="axlbl" x="0" y="${zero+3}">0</text>
-    ${points.map((p,i)=>{
-      const v = valueOf(p), h = Math.abs(v)/maxAbs * (H-padT-padB)/2;
-      const cx = padL + (points.length<2 ? (W-padL-padR)/2 : i/(points.length-1)*(W-padL-padR));
-      return `<rect x="${(cx-bw/2).toFixed(1)}" y="${(v>=0?zero-h:zero).toFixed(1)}" width="${bw.toFixed(1)}"
-        height="${Math.max(h,0.5).toFixed(1)}" fill="${v>=0?"var(--up)":"var(--down)"}"><title>${esc(p.date)} · ${fmt.lakh(v)}</title></rect>`;
-    }).join("")}
-  </svg>`;
-}
-/* Stacked allocation bands. Colours cycle through a fixed palette so a
-   sector keeps its colour across the whole series. */
-const SECTOR_COLOURS = ["#4E7BC4","#F2A93B","#43C08D","#E4604E","#8B6FC4","#3FA9B5","#C4A24E","#B5637F","#6F8FA0","#7FB55A"];
-function allocationChart(points, sectors){
-  const W = 1000, H = 130, padL = 52, padR = 8, padT = 8, padB = 20;
-  const colour = s => SECTOR_COLOURS[sectors.indexOf(s) % SECTOR_COLOURS.length];
-  const bw = Math.max(1.5, (W-padL-padR)/Math.max(points.length,1) * 0.8);
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
-    ${points.map((p,i)=>{
-      const cx = padL + (points.length<2 ? (W-padL-padR)/2 : i/(points.length-1)*(W-padL-padR));
-      let acc = 0;
-      return sectors.map(s=>{
-        const v = p.sectorAllocation[s] || 0;
-        if (!v) return "";
-        const h = v * (H-padT-padB), yy = padT + (H-padT-padB) - acc - h;
-        acc += h;
-        return `<rect x="${(cx-bw/2).toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}"
-          height="${h.toFixed(1)}" fill="${colour(s)}"><title>${esc(p.date)} · ${esc(s)} ${fmt.w(v)}</title></rect>`;
-      }).join("");
-    }).join("")}
-    <text class="axlbl" x="0" y="${padT+8}">100%</text>
-    <text class="axlbl" x="0" y="${H-padB}">0%</text>
-  </svg>`;
-}
-function renderHistory(){
-  const el = document.getElementById("hist-body");
-  const h = store.data.history;
-  if (!h){ el.innerHTML = empty("Loading from backend…"); return; }
-  if (!h.count){
-    el.innerHTML = empty(`No snapshots yet.<br>The evening job writes one per day —
-      run <b>python scripts/daily_update.py</b>, or wait for tonight's scheduled run.`);
-    return;
-  }
-  const p = h.points, last = p[p.length-1];
-  const withDaily = p.filter(x=>x.dailyPL != null);
-  const up = withDaily.filter(x=>x.dailyPL > 0).length;
-  const single = h.count < 2;
-  el.innerHTML = `
-  <div class="stats">
-    ${[["Snapshots", String(h.count), h.first === h.last ? h.first : `${h.first} → ${h.last}`, ""],
-       ["Portfolio value", fmt.inr(last.portfolioValue), "latest close", ""],
-       ["Total P&L", fmt.inr(last.totalPL), "after costs", last.totalPL>=0?"pos":"neg"],
-       ["Change over period", h.changeSinceFirst==null?"—":fmt.inr(h.changeSinceFirst),
-        single?"needs a second day":"since first snapshot",
-        (h.changeSinceFirst||0)>=0?"pos":"neg"],
-       ["Cash", fmt.w(last.cashPct), "of NAV", ""],
-       ["Up days", withDaily.length?`${up} / ${withDaily.length}`:"—", "days in profit", ""]]
-      .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${esc(s)}</div></div>`).join("")}
-  </div>
-
-  <div class="sec">Portfolio value <small>market value of open positions, per snapshot</small></div>
-  <div class="panel" style="margin-bottom:18px">
-    ${svgLine(p, x=>x.portfolioValue, {fmtY: v=>"₹"+(v/100000).toFixed(1)+"L"})}
-    <div class="hint">${esc(h.first)} → ${esc(h.last)}${single?" · one snapshot so far; the line grows a point each evening":""}</div>
-  </div>
-
-  <div class="sec">Total P&L <small>cumulative, after costs</small></div>
-  <div class="panel" style="margin-bottom:18px">
-    ${svgLine(p, x=>x.totalPL, {fmtY: v=>"₹"+(v/100000).toFixed(1)+"L",
-      colour: last.totalPL>=0?"var(--up)":"var(--down)"})}
-  </div>
-
-  <div class="sec">Daily P&L <small>change in total P&L between consecutive snapshots</small></div>
-  <div class="panel" style="margin-bottom:18px">
-    ${withDaily.length ? svgBars(withDaily, x=>x.dailyPL)
-      : `<div class="hint">Needs two snapshots. The first evening run has nothing to compare against.</div>`}
-  </div>
-
-  <div class="sec">Allocation <small>sector weights over time · hover a band for the exact weight</small></div>
-  <div class="panel" style="margin-bottom:18px">
-    ${allocationChart(p, h.sectors)}
-    <div class="complegend" style="margin-top:10px">
-      ${h.sectors.map((s,i)=>`<span><span class="dot" style="background:${SECTOR_COLOURS[i % SECTOR_COLOURS.length]}"></span>${esc(s)} ${fmt.w(last.sectorAllocation[s]||0)}</span>`).join("")}
-    </div>
-  </div>
-
-  <div class="sec">Snapshot log <small>newest first</small></div>
-  <div class="twrap"><table class="ptable">
-    <thead><tr><th>Date</th><th>Value</th><th>Invested</th><th>Cash</th><th>Total P&L</th>
-      <th>Daily P&L</th><th>Unrealized</th><th>Realized</th><th>Names</th><th>Wtd beta</th></tr></thead>
-    <tbody>
-    ${[...p].reverse().map(x=>`<tr><td>${esc(x.date)}</td>
-      <td>${fmt.inr(x.portfolioValue)}</td><td>${fmt.inr(x.investedValue)}</td>
-      <td>${fmt.w(x.cashPct)}</td>
-      <td class="${x.totalPL>=0?"pos":"neg"}">${fmt.inr(x.totalPL)}</td>
-      <td class="${(x.dailyPL||0)>=0?"pos":"neg"}">${x.dailyPL==null?"—":fmt.inr(x.dailyPL)}</td>
-      <td class="${x.unrealizedPL>=0?"pos":"neg"}">${fmt.inr(x.unrealizedPL)}</td>
-      <td class="${x.realizedPL>=0?"pos":"neg"}">${fmt.inr(x.realizedPL)}</td>
-      <td>${x.holdingsCount}</td>
-      <td>${x.riskMetrics && x.riskMetrics.weightedBeta!=null ? x.riskMetrics.weightedBeta.toFixed(2) : "—"}</td></tr>`).join("")}
-    </tbody>
-  </table></div>
-  <div class="foot">One snapshot per day, written by scripts/daily_update.py after the market close.
-  A failed market-data fetch writes nothing at all, so a gap in this table means that evening's run
-  failed — the previous day's figures were never overwritten.</div>`;
-}
-
 /* ================= RENDER: BANNER + IMPORT STATUS ================= */
 function renderBanner(){
   const el = document.getElementById("apibanner");
@@ -839,7 +806,16 @@ function renderBanner(){
     el.className = "on busy";
     el.textContent = "Loading from backend…";
   } else {
-    el.className = "";
+    const mm = store.data.dashboard?.qtyMismatches || [];
+    if (mm.length){
+      el.className = "on err";
+      el.innerHTML = `<b>Quantity mismatch — holdings file disagrees with the trade ledger for ` +
+        `${mm.length} name${mm.length===1?"":"s"}:</b><br>` +
+        mm.map(m=>`${esc(m.tk)}: holdings says ${m.holdingsQty}, trades imply ${m.tradesQty}`).join(" · ") +
+        ` — unrealized P&L is using the holdings figure. Fix whichever file is wrong.`;
+    } else {
+      el.className = "";
+    }
   }
 }
 function renderStatus(){
@@ -858,56 +834,77 @@ function renderStatus(){
 
 function renderAll(){
   renderHeader(); renderBanner(); renderOverview(); renderExposures();
-  renderRisk(); renderPerformance(); renderPositions(); renderHistory(); renderStatus();
+  renderRisk(); renderPerformance(); renderPositions(); renderStatus();
 }
 
 /* ================= IMPORT =================
    Pick file -> click Save Permanently -> POST -> report -> refresh.
    Nothing is parsed in the browser and nothing is written until the
    explicit, confirmed click. */
-const picked = {h:null, t:null};
+const picked = {h:null, t:null, cf:null};
 function pick(slot){ document.getElementById("file-"+slot).click(); }
 function chooseFile(file, slot){
   picked[slot] = file;
   const msg = document.getElementById("msg");
   msg.className = "msg ok";
   msg.textContent = `Ready to upload: ` +
-    [picked.h && `holdings "${picked.h.name}"`, picked.t && `trades "${picked.t.name}"`]
+    [picked.h && `holdings "${picked.h.name}"`, picked.t && `trades "${picked.t.name}"`,
+     picked.cf && `cashflows "${picked.cf.name}"`]
       .filter(Boolean).join(" and ") +
     `. Nothing is saved yet — click "Save Permanently" below.`;
   document.getElementById("preview").style.display = "none";
 }
 function resetImport(){
-  picked.h = picked.t = null;
+  picked.h = picked.t = picked.cf = null;
   document.getElementById("preview").style.display = "none";
   document.getElementById("msg").className = "msg";
   document.getElementById("file-h").value = ""; document.getElementById("file-t").value = "";
+  document.getElementById("file-cf").value = "";
 }
 function reportHTML(kind, r){
-  const bits = [];
-  if (r.inserted) bits.push(`${r.inserted} inserted`);
-  if (r.updated) bits.push(`${r.updated} updated`);
-  if (r.skipped_duplicates) bits.push(`${r.skipped_duplicates} already recorded`);
-  if (r.placeholder_holdings_created.length)
-    bits.push(`placeholder holding created for ${r.placeholder_holdings_created.map(esc).join(", ")} (needs metadata)`);
-  const errs = r.errors.length
+  // Two genuinely different shapes come back -- POST /api/import/holdings
+  // returns {file,holdings,trades,cash,errors}, POST /api/import/trades
+  // returns {file,added,duplicates,total,placeholderHoldings,errors}. This
+  // used to assume a third, older shape (inserted/updated/skipped_duplicates/
+  // placeholder_holdings_created/parsedRows/durationMs) that no field here
+  // has ever matched since the Drive rewrite -- reading .length off the
+  // always-undefined placeholder_holdings_created threw, the catch in
+  // savePermanently() printed "Import failed" for an import that had
+  // actually already succeeded, and because that throw happened before
+  // refresh() ran, the screen kept showing pre-upload numbers.
+  const bits = "added" in r
+    ? [r.added ? `${r.added} new trade${r.added===1?"":"s"} added` : null,
+       r.duplicates ? `${r.duplicates} already recorded` : null,
+       `${r.total} on record`,
+       (r.placeholderHoldings||[]).length
+         ? `placeholder holding created for ${r.placeholderHoldings.map(esc).join(", ")} (needs metadata)`
+         : null]
+    : [`${r.holdings} holdings on record`, `cash now ${fmt.w(r.cash)}`];
+  const errors = r.errors || [];
+  const errs = errors.length
     ? `<div class="twrap" style="margin-top:10px"><table class="ptable">
          <thead><tr><th>Row</th><th>Problem</th></tr></thead><tbody>
-         ${r.errors.map(e=>`<tr><td>${e.row}</td><td class="wraptext">${esc(e.message)}</td></tr>`).join("")}
+         ${errors.map(e=>`<tr><td>${e.row}</td><td class="wraptext">${esc(e.message)}</td></tr>`).join("")}
        </tbody></table></div>` : "";
-  return `<div class="sec" style="margin-top:22px">${kind} <small>${esc(r.file)} · ${r.parsedRows} rows read · ${r.durationMs}ms</small></div>
-    <div class="panel">${bits.join(" · ") || "nothing to change"}
-      ${r.errors.length ? `<br><b style="color:var(--down)">${r.errors.length} row(s) rejected:</b>` : ""}
+  return `<div class="sec" style="margin-top:22px">${kind} <small>${esc(r.file)}</small></div>
+    <div class="panel">${bits.filter(Boolean).join(" · ") || "nothing to change"}
+      ${errors.length ? `<br><b style="color:var(--down)">${errors.length} row(s) rejected:</b>` : ""}
     </div>${errs}`;
 }
 async function savePermanently(){
-  const jobs = [];
-  if (picked.h) jobs.push(["holdings", picked.h, "Holdings import"]);
-  if (picked.t) jobs.push(["trades", picked.t, "Trades import"]);
-  if (!jobs.length){ alert("Pick a holdings or trades file first."); return; }
-  if (!confirm(`Upload ${jobs.map(j=>j[0]).join(" and ")} to the backend and save permanently?\n\n` +
-               `Trades are appended (duplicates ignored); holdings update metadata without touching ` +
-               `trade history. There is no undo button in the app — clear the Drive folder to wipe it later.`)) return;
+  // Holdings now carries the share quantity that unrealized P&L is based
+  // on; trades carries realized P&L and cost basis. Importing one without
+  // the other lets them drift out of sync, so both are required together,
+  // always -- no partial upload.
+  if (!picked.h || !picked.t){
+    alert("Pick both a holdings file and a trades file — they're imported together.");
+    return;
+  }
+  const jobs = [["holdings", picked.h, "Holdings import"], ["trades", picked.t, "Trades import"]];
+  if (picked.cf) jobs.push(["cashflows", picked.cf, "Cashflows import"]);
+  if (!confirm(`Upload ${jobs.map(j=>j[0]).join(", ")} to the backend and save permanently?\n\n` +
+               `Trades and cashflows are appended (duplicates ignored); holdings update metadata without ` +
+               `touching trade history. There is no undo button in the app — clear the Drive folder to wipe it later.`)) return;
 
   const msg = document.getElementById("msg"), preview = document.getElementById("preview");
   msg.className = "msg ok"; msg.textContent = "Uploading…";
@@ -927,21 +924,23 @@ async function savePermanently(){
   preview.style.display = "block";
   msg.className = "msg ok";
   msg.textContent = "Saved permanently. Dashboard refreshed.";
-  picked.h = picked.t = null;
+  picked.h = picked.t = picked.cf = null;
   document.getElementById("file-h").value = ""; document.getElementById("file-t").value = "";
+  document.getElementById("file-cf").value = "";
   await refresh();          // no page reload -- every screen re-reads the backend
 }
 
 /* ================= BOOT ================= */
 async function refresh(){ await store.load(ALL); }
 store.subscribe(renderAll);
-for (const slot of ["h","t"]){
+for (const slot of ["h","t","cf"]){
   const dz = document.getElementById("drop-"+slot);
   document.getElementById("file-"+slot).addEventListener("change", e=>{ if(e.target.files[0]) chooseFile(e.target.files[0], slot); });
   ["dragover","dragenter"].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault();dz.classList.add("over");}));
   ["dragleave","drop"].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault();dz.classList.remove("over");}));
   dz.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) chooseFile(e.dataTransfer.files[0], slot); });
 }
+updateDateFilteredLinks();
 refresh();
 setInterval(refresh, 15*60*1000);   // same cadence the signal feed used to poll at
 </script>

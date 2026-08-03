@@ -3,7 +3,8 @@
 Returns last price, market cap (Rs crore), 52-week range, cross-sectional
 value / momentum / quality z-scores and descriptive risk stats for every
 ticker in the book — plus a market-cap-weighted sector and size benchmark
-across the Nifty Smallcap 250 + Microcap 250 (see BENCH_INDICES).
+across the whole NSE market, large-cap through micro-cap (see
+BENCH_INDICES).
 
 Division of labour: holdings are human-owned and only ever READ here. This
 script never edits the book.
@@ -24,6 +25,7 @@ import csv
 import io
 import json
 import math
+import re
 import sys
 import urllib.request
 from collections import defaultdict
@@ -35,19 +37,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 OUT = "signals.json"
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Size cuts in Rs crore. MUST match CUTS in index.html or the dashboard's size
-# buckets and this benchmark disagree.
-CUTS = {"large": 67000, "mid": 22000}
+# Size cuts in Rs crore. MUST match CUTS in backend/calculator.py, or the
+# dashboard's own size buckets and this benchmark disagree. AMFI's official
+# semi-annual large/mid/small classification cutoffs -- see calculator.py.
+CUTS = {"large": 106300, "mid": 33500}
 
-# Beta benchmark. Nifty 50 — the index the book is actually discussed against.
-INDEX = "^NSEI"
-
-# Cross-sectional universe: Smallcap 250 + Microcap 250, unioned. The book is
-# small and micro-cap names, so this pair is the peer group that makes a
-# z-score mean something — against the Nifty 500 they all read as extreme on
-# size alone. The two lists don't overlap (checked at runtime), so the union
-# is exactly 500 names, half small-cap and half micro-cap.
+# Cross-sectional universe: every NSE-listed name from Nifty 100 down through
+# Microcap 250, unioned -- the book can hold large, mid, small or micro-cap
+# names (and mix them), so a stock's z-score is only meaningful against the
+# tier it actually competes in, not one fixed slice of the market. NSE
+# defines these four tiers as mutually exclusive by rank; the four lists
+# don't overlap (checked at runtime), so the union is the whole investable
+# market, each name scored against its own real peer group.
 BENCH_INDICES = [
+    ("https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv", "Nifty 100"),
+    ("https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv", "Nifty Midcap 150"),
     ("https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv", "Nifty Smallcap 250"),
     ("https://nsearchives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv", "Nifty Microcap 250"),
 ]
@@ -151,17 +155,68 @@ def risk(closes):
     }
 
 
-def beta(close_df, sym, index_sym):
-    """Slope of the stock's daily returns against the index's, on the dates
-    they share. pandas aligns them; a plain list of closes could not."""
+def adv(volumes, window=MONTH):
+    """Average daily traded volume over the last `window` sessions -- a
+    30-year average is useless for liquidity, a name's trading activity
+    today is what matters. None below a minimum sample rather than a
+    number computed on 2 days of data."""
+    recent = volumes[-window:]
+    if len(recent) < window // 2:
+        return None
+    return sum(recent) / len(recent)
+
+
+def bench_return_series(close_df, symbols, mcap):
+    """Market-cap-weighted average daily return across the given symbols --
+    the beta benchmark. Same universe and the same weighting convention
+    (today's full market cap, not free float, not historically reweighted)
+    that bench_sect/bench_size already use for composition -- one
+    consistent proxy for 'the market' this book lives in, not a second,
+    different one. Nifty Smallcap 250 + Microcap 250 has no single tradable
+    index/ticker to fetch directly, so this is built from the same ~500
+    constituent prices already downloaded.
+
+    Renormalizes by the weight of names that actually have a price on each
+    day, so a handful of missing quotes don't quietly drag the composite
+    toward zero."""
+    import pandas as pd
+    cols = [s for s in symbols if s in close_df.columns and mcap.get(s)]
+    if not cols:
+        return None
+    w = pd.Series({s: mcap[s] for s in cols})
+    rets = close_df[cols].pct_change()
+    numer = rets.mul(w, axis=1).sum(axis=1, skipna=True)
+    denom = rets.notna().mul(w, axis=1).sum(axis=1)
+    return numer / denom.replace(0, float("nan"))
+
+
+def bench_index_level(bench_returns):
+    """Daily returns -> a dated cumulative level starting at 100 -- what a
+    benchmark-relative XIRR needs (the level ON a specific historical
+    contribution date), which the daily-return series used for beta can't
+    answer by itself. A day with no composite return (bench_returns is NaN)
+    carries the level forward flat rather than dropping the date, so a
+    contribution date can always be looked up."""
+    if bench_returns is None:
+        return {}
+    level = (1 + bench_returns.fillna(0)).cumprod() * 100
+    return {d.strftime("%Y-%m-%d"): round(float(v), 4) for d, v in level.items()}
+
+
+def beta(close_df, sym, bench_returns):
+    """Slope of the stock's daily returns against the benchmark's, on the
+    dates they share. pandas aligns them; a plain list of closes could not."""
+    if bench_returns is None or sym not in close_df.columns:
+        return None
     try:
-        pair = close_df[[sym, index_sym]].pct_change().dropna()
+        import pandas as pd
+        pair = pd.concat([close_df[sym].pct_change(), bench_returns], axis=1).dropna()
         if len(pair) < 60:
             return None
-        var = pair[index_sym].var()
+        var = pair.iloc[:, 1].var()
         if not var:
             return None
-        return round(pair[sym].cov(pair[index_sym]) / var, 2)
+        return round(pair.iloc[:, 0].cov(pair.iloc[:, 1]) / var, 2)
     except Exception:
         return None
 
@@ -201,6 +256,37 @@ def fetch_index_csv(url, name):
     return syms
 
 
+def _parse_screener_sector(html):
+    """Pure parsing step, split out from screener_sector() so the selftest
+    can exercise it against a static fixture with no network call. Screener
+    has no official API; this reads the "Peer comparison" breadcrumb
+    (`<a title="Sector">NAME</a>`) straight out of the page HTML."""
+    m = re.search(r'title="Sector">([^<]+)</a>', html)
+    return m.group(1).strip() if m else None
+
+
+def screener_sector(symbol):
+    """Screener.in fallback, used ONLY when Yahoo has no sector at all for a
+    stock -- rare (1 name out of ~500 in a full run), usually a just-renamed
+    or recently-restructured listing Yahoo's database hasn't caught up with.
+
+    Unlike fetch_index_csv() above, this is best-effort, not critical: no
+    official Screener API exists, and _parse_screener_sector() can break
+    silently if Screener redesigns that section. Returns None on ANYTHING
+    going wrong -- timeout, 404, missing markup. A missing sector already
+    renders as "Unclassified" today; this only ever narrows that gap,
+    never widens it, and never blocks the run.
+    """
+    try:
+        req = urllib.request.Request(
+            f"https://www.screener.in/company/{symbol}/consolidated/",
+            headers={"User-Agent": "Mozilla/5.0"})
+        html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", errors="replace")
+        return _parse_screener_sector(html)
+    except Exception:
+        return None
+
+
 def constituents():
     """Union of BENCH_INDICES' constituents, straight from NSE.
 
@@ -219,17 +305,28 @@ def constituents():
     return out
 
 
-def fetch(symbols):
-    """-> ({symbol: [close, ...]}, {symbol: info}, close_dataframe).
-    One bulk price call; the fundamentals endpoint is per-name and flaky, so
-    each is isolated. 5 years, because drawdown and worst-month need it —
-    momentum anchors on an explicit offset rather than the start of the series."""
-    import yfinance as yf
+INFO_WORKERS = 20   # ponytail: fixed pool size, tune if Yahoo starts throttling
 
-    px = {}
+
+def fetch(symbols):
+    """-> ({symbol: [close, ...]}, {symbol: [volume, ...]}, {symbol: info},
+    close_dataframe).
+    One bulk price call; the fundamentals endpoint is per-name and flaky, so
+    each is isolated -- and independent, so a thread pool fetches them
+    concurrently instead of one at a time (~500 sequential .info calls was
+    the entire runtime of the nightly job). 5 years, because drawdown and
+    worst-month need it — momentum anchors on an explicit offset rather
+    than the start of the series.
+
+    Volume rides along in the same download (yfinance always returns the
+    full OHLCV set) -- it used to be fetched and thrown away."""
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+
+    px, vol = {}, {}
     data = yf.download(symbols, period="5y", auto_adjust=True,
                        progress=False, group_by="column")
-    close = data["Close"]
+    close, volume = data["Close"], data["Volume"]
     for s in symbols:
         try:
             series = close[s] if hasattr(close, "columns") else close
@@ -238,14 +335,21 @@ def fetch(symbols):
             continue
         if vals:
             px[s] = vals
-
-    info = {}
-    for s in px:
         try:
-            info[s] = yf.Ticker(s).info or {}
+            vseries = volume[s] if hasattr(volume, "columns") else volume
+            vol[s] = [float(v) for v in vseries.dropna().tolist()]
+        except (KeyError, TypeError, ValueError):
+            vol[s] = []
+
+    def _info(s):
+        try:
+            return s, (yf.Ticker(s).info or {})
         except Exception:                      # yfinance raises freely here
-            info[s] = {}
-    return px, info, close
+            return s, {}
+
+    with ThreadPoolExecutor(max_workers=INFO_WORKERS) as ex:
+        info = dict(ex.map(_info, px))
+    return px, vol, info, close
 
 
 def num(d, *keys):
@@ -257,6 +361,19 @@ def num(d, *keys):
     return None
 
 
+def positive_num(d, *keys):
+    """Like num(), but for a ratio that is only meaningful when positive --
+    P/E, P/B, EV/EBITDA. A loss-making company prices to a negative P/E,
+    which isn't 'cheaper than a 500x P/E', it's a different thing the ratio
+    can't express at all. Left in, it z-scores as an extreme outlier and
+    the value factor reads a loss-maker as the deepest bargain in the book.
+    Drop it from that cross-section instead -- unlike ROE or margins (see
+    qual below), where a negative number is a real, meaningful signal and
+    must stay in."""
+    v = num(d, *keys)
+    return v if (v is not None and v > 0) else None
+
+
 def build():
     holdings = load_book()
     # Yahoo symbols to try per holding. Most NSE names are TK.NS; SME and
@@ -266,11 +383,10 @@ def build():
               for h in holdings}
 
     universe = [f"{t}.NS" for t in constituents()]
-    symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs}
-                     | {INDEX})               # INDEX is the beta benchmark
+    symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs})
     print(f"fetching {len(symbols)} symbols ({len(wanted)} holdings + "
-          f"{len(universe)} {INDEX_NAME} + index)...")
-    px, info, close_df = fetch(symbols)
+          f"{len(universe)} {INDEX_NAME})...")
+    px, vol, info, close_df = fetch(symbols)
 
     # Resolve each holding to the first candidate that actually returned data.
     resolved, errors = {}, []
@@ -289,7 +405,7 @@ def build():
 
     momo = zscores({s: momentum(px[s]) for s in scored}, clip=False)
     val = blend(*[{k: (-v if v is not None else None)
-                   for k, v in zscores({s: num(info[s], *ks) for s in scored}).items()}
+                   for k, v in zscores({s: positive_num(info[s], *ks) for s in scored}).items()}
                   for ks in (("forwardPE", "trailingPE"),
                              ("priceToBook",),
                              ("enterpriseToEbitda",))])
@@ -299,6 +415,8 @@ def build():
          for k, v in zscores({s: num(info[s], "debtToEquity") for s in scored}).items()},
         zscores({s: num(info[s], "profitMargins") for s in scored}),
     )
+
+    bench_returns = bench_return_series(close_df, universe, mcap)
 
     signals = {}
     for tk, s in resolved.items():
@@ -317,7 +435,8 @@ def build():
             "worstM": r.get("worstM"),
             "mdd": r.get("mdd"),
             "dvol": r.get("dvol"),
-            "beta": beta(close_df, s, INDEX),
+            "beta": beta(close_df, s, bench_returns),
+            "adv": adv(vol.get(s, [])),
         }
 
     # Benchmark: market-cap weighted over the universe names that priced.
@@ -326,7 +445,12 @@ def build():
         m = mcap.get(s, 0)
         if not m:
             continue
-        bench_sect[info[s].get("sector") or "Unclassified"] += m
+        sector = info[s].get("sector")
+        if not sector:
+            sector = screener_sector(s.split(".")[0])
+            if sector:
+                print(f"  {s}: no sector from Yahoo, found on Screener -> {sector}")
+        bench_sect[sector or "Unclassified"] += m
         bench_size["Large" if m >= CUTS["large"] else
                    "Mid" if m >= CUTS["mid"] else "Small"] += m
     tot = sum(bench_sect.values())
@@ -346,10 +470,23 @@ def build():
         "signals": signals,
         "bench_sect": share(bench_sect),
         "bench_size": share(bench_size),
+        "bench_index_level": bench_index_level(bench_returns),
     }
 
 
 def selftest():
+    # Real fragment captured from screener.in/company/JSWDULUX/consolidated/,
+    # not invented -- if Screener ever restyles this section, this is the
+    # first thing that should fail, before a nightly run silently gets None.
+    real_fragment = '''
+        <a href="/market/IN02/" target="_blank" title="Broad Sector">Consumer Discretionary</a>
+        <a href="/market/IN02/IN0202/" target="_blank" title="Sector">Consumer Durables</a>
+        <a href="/market/IN02/IN0202/IN020201/" target="_blank" title="Broad Industry">Consumer Durables</a>
+    '''
+    assert _parse_screener_sector(real_fragment) == "Consumer Durables"
+    assert _parse_screener_sector("<html>no breadcrumb here</html>") is None, \
+        "a redesigned page must return None, not raise"
+
     w = winsorize(list(range(2, 22)) + [10 ** 6])          # n=21 -> clip 1 each end
     assert max(w) == 21 and min(w) == 3, w                 # 10^6 -> 21, 2 -> 3
     assert winsorize([1, 2, 3, 4, 500]) == [1, 2, 3, 4, 500], "n=5 is below the 5% cut"
@@ -393,6 +530,48 @@ def selftest():
 
     assert num({"a": 0, "b": 3}, "a", "b") == 3.0, "zero must fall through"
     assert num({"a": float("nan")}, "a") is None
+
+    assert positive_num({"trailingPE": -8.0}, "trailingPE") is None, \
+        "a loss-maker's negative P/E must not enter the value cross-section"
+    assert positive_num({"trailingPE": 15.0}, "trailingPE") == 15.0
+    assert positive_num({"trailingPE": 0.0}, "trailingPE") is None
+
+    assert adv([]) is None, "no data must not fake a zero"
+    assert adv([100.0] * 5) is None, "below minimum sample must be None"
+    assert adv([1000.0] * 21) == 1000.0
+    assert adv([1.0] * 200 + [3000.0] * 21) == 3000.0, "only the recent window counts"
+
+    import pandas as pd
+    import random
+    random.seed(0)
+    n = 80
+    bench_px = [100.0]
+    for _ in range(n - 1):
+        bench_px.append(bench_px[-1] * (1 + random.uniform(-0.02, 0.02)))
+    # STOCKX moves at exactly 2x the benchmark's daily return, by construction.
+    bench_rets = [bench_px[i] / bench_px[i - 1] - 1 for i in range(1, n)]
+    stockx_px = [50.0]
+    for r in bench_rets:
+        stockx_px.append(stockx_px[-1] * (1 + 2 * r))
+    df = pd.DataFrame({"BENCH1": bench_px, "BENCH2": bench_px, "STOCKX": stockx_px})
+
+    composite = bench_return_series(df, ["BENCH1", "BENCH2"], {"BENCH1": 1000.0, "BENCH2": 1000.0})
+    assert (composite.dropna() - df["BENCH1"].pct_change().dropna()).abs().max() < 1e-9, \
+        "two identical, equally-weighted names must give back the same series"
+    assert bench_return_series(df, ["NOPE"], {"NOPE": 100.0}) is None, "no matching symbols must not crash"
+
+    b = beta(df, "STOCKX", composite)
+    assert abs(b - 2.0) < 0.01, f"a 2x-levered series must price back to beta ~2.0, got {b}"
+    assert beta(df, "STOCKX", None) is None, "no benchmark series must not crash"
+    assert beta(df, "GHOST", composite) is None, "a symbol not in the price data must not crash"
+
+    assert bench_index_level(None) == {}
+    flat = pd.Series([0.0, 0.0, 0.0], index=pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-05"]))
+    lvl = bench_index_level(flat)
+    assert lvl == {"2026-01-01": 100.0, "2026-01-02": 100.0, "2026-01-05": 100.0}, lvl
+    growth = pd.Series([0.10, 0.10], index=pd.to_datetime(["2026-01-01", "2026-01-02"]))
+    lvl2 = bench_index_level(growth)
+    assert lvl2["2026-01-01"] == 110.0 and abs(lvl2["2026-01-02"] - 121.0) < 1e-6, lvl2
     print("selftest ok")
 
 

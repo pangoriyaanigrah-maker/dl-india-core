@@ -1,6 +1,6 @@
 """daily_update.py — the evening job. Run once per weekday after close.
 
-    fetch market data  ->  signals.json  ->  recalculate  ->  history point
+    fetch market data  ->  signals.json  ->  recalculate
 
 Everything lands on Google Drive. There is no database.
 
@@ -32,13 +32,13 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import calculator                                        # noqa: E402
 import drive                                             # noqa: E402
-from drive import (DASHBOARD_JSON, HISTORY_JSON, METADATA_JSON,   # noqa: E402
-                    PORTFOLIO_JSON, SIGNALS_JSON)
+import sheets                                            # noqa: E402
+from drive import DASHBOARD_JSON, METADATA_JSON, PORTFOLIO_JSON, SIGNALS_JSON  # noqa: E402
 
 log = logging.getLogger("dl.daily")
 
 
-def run(fetch: bool = True, on: dt.date | None = None) -> int:
+def run(fetch: bool = True) -> int:
     t0 = time.perf_counter()
     try:
         drive.connect()
@@ -67,14 +67,18 @@ def run(fetch: bool = True, on: dt.date | None = None) -> int:
         drive.write_json(DASHBOARD_JSON, derived)
         drive.write_json(METADATA_JSON, meta)
 
-        history = calculator.append_history(
-            drive.read_json(HISTORY_JSON) or {}, calculator.snapshot_point(derived, on))
-        drive.write_json(HISTORY_JSON, history)
+        # Best-effort, same as the archival copies in api.py -- a Sheets
+        # hiccup must never make an otherwise-successful nightly run report
+        # failure (sheets.py already swallows its own errors; this is just
+        # the one place that decides WHEN to call it: once a day, here,
+        # not on every import).
+        sheets.sync_current(derived)
+        sheets.append_history(derived)
 
         d = derived["dashboard"]
-        log.info("done in %.1fs — %d holdings, value %.0f, P&L %.0f, %d history points",
+        log.info("done in %.1fs — %d holdings, value %.0f, P&L %.0f",
                  time.perf_counter() - t0, d["holdingsCount"], d["currentValue"],
-                 d["overallPL"], history["count"])
+                 d["overallPL"])
         return 0
     except Exception as e:
         log.error("daily update FAILED, stored files unchanged — yesterday's data is still live: %s", e)
@@ -87,7 +91,5 @@ if __name__ == "__main__":
                         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--recalc-only", action="store_true", help="skip the price fetch")
-    ap.add_argument("--date", help="history date (YYYY-MM-DD), default today")
     a = ap.parse_args()
-    sys.exit(run(fetch=not a.recalc_only,
-                 on=dt.date.fromisoformat(a.date) if a.date else None))
+    sys.exit(run(fetch=not a.recalc_only))

@@ -3,6 +3,9 @@
 # append a history point. Everything is stored on Google Drive.
 name: update-signals
 
+permissions:
+  issues: write   # only the failure-notification step needs this
+
 on:
   schedule:
     - cron: "30 12 * * 1-5"   # 18:00 IST daily Mon-Fri (buffer after close)
@@ -28,3 +31,44 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
         run: python scripts/daily_update.py
+
+      # A silent cron failure is worse than a loud one -- yesterday's data
+      # just keeps showing with nothing on screen saying it's stale. GitHub
+      # emails on a failed scheduled run too, but that's easy to miss; a
+      # standing issue is hard to. One issue is reused across consecutive
+      # failures (commented on, not duplicated) and auto-closed the next
+      # time the job succeeds, so a bad week doesn't pile up five of them.
+      - name: Open or update a failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          EXISTING=$(gh issue list --search "Signal refresh is failing in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --title "Signal refresh is failing" \
+              --body "The nightly update-signals job failed. Dashboard is showing stale data until this is fixed.
+
+          Run: $RUN_URL
+
+          This issue stays open and gets a comment on each further failure -- it closes itself automatically the next time the job succeeds."
+          fi
+
+  notify-recovered:
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close the failure issue if one is open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          EXISTING=$(gh issue list --search "Signal refresh is failing in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --comment "Fixed -- the job ran clean again."
+          fi

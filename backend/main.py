@@ -16,12 +16,17 @@ import os
 import time
 import uuid
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import drive
 from api import router
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 logging.basicConfig(level=logging.INFO, datefmt="%H:%M:%S",
                     format="%(asctime)s %(levelname)-7s %(name)s | %(message)s")
@@ -38,7 +43,7 @@ app = FastAPI(
     ),
 )
 
-# The frontend is deployed separately (Vercel), so it is a different
+# The frontend is hosted separately (GitHub Pages), so it is a different
 # origin. Set CORS_ORIGINS to a comma-separated list in production; the
 # default is permissive because this API holds one person's own data and
 # has no authentication to protect.
@@ -81,6 +86,20 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def no_store_api(request: Request, call_next):
+    """Every /api/* response is live financial data with no version or
+    timestamp of its own. With no Cache-Control at all, a browser is free
+    to apply heuristic freshness (RFC 7234 4.2.2) and quietly answer a
+    later fetch() from its own cache instead of asking again -- indistin-
+    guishable from the dashboard just not updating. Be explicit instead of
+    hoping a default is conservative enough."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path == "/health":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.exception_handler(drive.DriveError)
 async def _drive_down(request: Request, exc: drive.DriveError):
     log.error("storage failure on %s: %s", request.url.path, exc)
@@ -103,3 +122,27 @@ def health():
     except drive.DriveError as e:
         return JSONResponse(status_code=503,
                             content={"status": "degraded", "storage": "unavailable", "detail": str(e)})
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """index.html and config.js are redeployed by overwriting the same
+    path, with no cache-busting hash in the URL -- the only signal a
+    browser has that the file changed is asking again. Default StaticFiles
+    sends Last-Modified/ETag but no Cache-Control, so browsers fall back
+    to heuristic freshness and can serve a stale copy for a while with no
+    revalidation at all: exactly what "the new trade doesn't show up"
+    looks like from the outside, even though the backend is correct.
+    no-cache (not no-store) keeps the fast path -- a 304 on an unchanged
+    file -- while still forcing a check on every load."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+# Serve the dashboard too, so `uvicorn main:app` is the whole app locally --
+# one origin, so no CORS and no API_BASE to set. In production GitHub Pages
+# serves index.html and this mount simply goes unused. Mounted LAST: the
+# routes above win, this catches everything else.
+app.mount("/", NoCacheStaticFiles(directory=REPO_ROOT, html=True), name="dashboard")

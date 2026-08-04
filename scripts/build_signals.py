@@ -308,24 +308,39 @@ def constituents():
 INFO_WORKERS = 20   # ponytail: fixed pool size, tune if Yahoo starts throttling
 
 
-def fetch(symbols):
+def fetch(symbols, timeout=None, skip_info=False, period="5y"):
     """-> ({symbol: [close, ...]}, {symbol: [volume, ...]}, {symbol: info},
     close_dataframe).
     One bulk price call; the fundamentals endpoint is per-name and flaky, so
     each is isolated -- and independent, so a thread pool fetches them
     concurrently instead of one at a time (~500 sequential .info calls was
-    the entire runtime of the nightly job). 5 years, because drawdown and
-    worst-month need it — momentum anchors on an explicit offset rather
-    than the start of the series.
+    the entire runtime of the nightly job). 5 years by default, because
+    drawdown and worst-month need it — momentum anchors on an explicit
+    offset rather than the start of the series. quick_prices() only needs
+    52-week hi/lo, so it overrides this to 1y -- 5 years of daily OHLCV
+    for even 10 symbols is real payload weight and was the actual reason
+    the "fast" path measured ~10s, not the .info loop this also skips.
 
     Volume rides along in the same download (yfinance always returns the
-    full OHLCV set) -- it used to be fetched and thrown away."""
+    full OHLCV set) -- it used to be fetched and thrown away.
+
+    timeout (seconds): None here means yfinance's own default -- fine for
+    the nightly job, which is already expected to take minutes. quick_prices()
+    passes an explicit short timeout since IT runs inline during a live
+    request and must not be able to hang it indefinitely.
+
+    skip_info: the per-ticker .info loop is the ACTUAL slow part (measured:
+    ~10s for just 10 symbols, unbounded per-call, dwarfing the bulk price
+    download it's paired with) -- quick_prices() only ever needed it for
+    mcap, and mcap staying a few minutes stale until the next full build()
+    is the same accepted tradeoff as val/momo/qual/beta. Skipping it here
+    is what actually keeps the fast path fast, not the timeout above."""
     import yfinance as yf
     from concurrent.futures import ThreadPoolExecutor
 
     px, vol = {}, {}
-    data = yf.download(symbols, period="5y", auto_adjust=True,
-                       progress=False, group_by="column")
+    data = yf.download(symbols, period=period, auto_adjust=True,
+                       progress=False, group_by="column", timeout=timeout)
     close, volume = data["Close"], data["Volume"]
     for s in symbols:
         try:
@@ -340,6 +355,9 @@ def fetch(symbols):
             vol[s] = [float(v) for v in vseries.dropna().tolist()]
         except (KeyError, TypeError, ValueError):
             vol[s] = []
+
+    if skip_info:
+        return px, vol, {}, close
 
     def _info(s):
         try:
@@ -372,6 +390,50 @@ def positive_num(d, *keys):
     must stay in."""
     v = num(d, *keys)
     return v if (v is not None and v > 0) else None
+
+
+def quick_prices(holdings):
+    """Fast, book-only price refresh: just cmp/lo/hi for the current
+    holdings, no benchmark universe, no per-ticker .info call. Meant to
+    run inline right after an import -- fetching 750+ symbols (2+
+    minutes) is too slow for a request to wait on, and even the .info
+    lookup alone measured ~10s for just 10 symbols (skip_info=True below
+    is what actually makes this fast, not the timeout).
+
+    mcap/val/momo/qual/beta need either the .info call or the full
+    cross-sectional universe (a z-score against 15 of your own names
+    isn't a real market comparison) and are deliberately NOT touched here
+    -- they stay whatever the last full build() computed until the next
+    one runs. ponytail: cmp moving without those also moving is a real,
+    accepted staleness window (a P/E-based value read is technically a
+    few minutes behind the price it's using) -- not worth a partial
+    factor recompute for a personal book checked a few times a day, not
+    by a millisecond.
+
+    -> ({ticker: {"cmp", "lo", "hi"}}, [error strings])
+    Only tickers that actually resolved on Yahoo are included."""
+    wanted = {h["tk"]: [h["yfSymbol"]] if h.get("yfSymbol")
+                       else [f'{h["tk"]}.NS', f'{h["tk"]}.BO']
+              for h in holdings}
+    symbols = sorted({c for cs in wanted.values() for c in cs})
+    if not symbols:
+        return {}, []
+    px, vol, info, close_df = fetch(symbols, timeout=8, skip_info=True, period="1y")
+
+    resolved, errors = {}, []
+    for tk, cands in wanted.items():
+        hit = next((c for c in cands if c in px), None)
+        if hit:
+            resolved[tk] = hit
+        else:
+            errors.append(f"{tk}: no Yahoo data for {' or '.join(cands)}")
+
+    out = {}
+    for tk, s in resolved.items():
+        r = risk(px[s])
+        out[tk] = {"cmp": round(px[s][-1], 2),
+                   "lo": r.get("lo", round(min(px[s]), 2)), "hi": r.get("hi")}
+    return out, errors
 
 
 def build():

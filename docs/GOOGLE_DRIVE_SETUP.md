@@ -129,6 +129,22 @@ GETs (reading already-stored JSON, fast) are far less at risk than POST
 persistent-server hosts (Render, Railway) were the original assumption in
 this doc -- they don't have a per-request timeout at all.
 
+**A second, separate cost stacks on top of that:** every holdings/trades
+import now also fires `_quick_refresh_prices` (`api.py`) -- a live Yahoo
+Finance price fetch for just the book's own holdings, so P&L reflects the
+current price in the same response instead of waiting on the ~3-minute
+full signals-refresh job. Measured directly against real Yahoo Finance,
+10 symbols: **~9-10 seconds**, even after dropping the 5-year history down
+to 1y and skipping the per-ticker `.info` call entirely -- that appears to
+be Yahoo's own per-request connection/latency floor for a multi-symbol
+`yf.download()`, not something tunable away further from this side. It is
+best-effort (a slow/failed fetch never breaks the import, prices just
+stay as stale as they already were), but on Vercel's default 10s timeout
+this is genuinely borderline and can time out some of the time. Same fix
+as above: raise `maxDuration`, with real headroom this time (20-30s, not
+just past 10s) -- 9-10s plus the existing Drive-write cost easily exceeds
+a bare 10-15s ceiling.
+
 ## The evening job
 
 ```bash

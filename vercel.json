@@ -3,7 +3,7 @@
     {
       "src": "backend/main.py",
       "use": "@vercel/python",
-      "config": { "includeFiles": ["index.html", "config.js"] }
+      "config": { "includeFiles": ["index.html", "config.js", "scripts/build_signals.py"] }
     }
   ],
   "routes": [

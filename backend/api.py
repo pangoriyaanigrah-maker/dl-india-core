@@ -11,8 +11,10 @@ import io
 import json
 import logging
 import os
+import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -23,6 +25,8 @@ import parser
 import sheets
 from drive import (CASHFLOWS_XLSX, DASHBOARD_JSON, HOLDINGS_XLSX, METADATA_JSON,
                     PORTFOLIO_JSON, SIGNALS_JSON, TRADES_XLSX, DriveError)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 log = logging.getLogger("dl.api")
 router = APIRouter(prefix="/api")
@@ -238,6 +242,30 @@ def _trigger_signals_refresh():
         log.warning("could not trigger update-signals workflow (import itself is unaffected): %s", e)
 
 
+def _quick_refresh_prices(book):
+    """Best-effort: fetch live cmp/mcap/lo/hi for just THIS book's own
+    holdings (~10-20 names, a few seconds) and merge into the stored feed,
+    so P&L/NAV reflect the current price in this same import response --
+    not the ~3 minutes the full cross-sectional job genuinely needs for
+    750+ symbols (see _trigger_signals_refresh, which still runs that job
+    in the background for val/momo/qual/beta -- unaffected by this).
+    Only the fields quick_prices() actually recomputes get touched; a
+    Yahoo/import hiccup here just leaves prices as stale as they already
+    were, never breaks the import itself."""
+    try:
+        import build_signals
+        updates, errors = build_signals.quick_prices(book["holdings"])
+        if not updates:
+            return
+        feed = _feed()
+        signals = feed.setdefault("signals", {})
+        for tk, patch in updates.items():
+            signals.setdefault(tk, {}).update(patch)
+        drive.write_json(SIGNALS_JSON, feed)
+    except Exception as e:
+        log.warning("quick price refresh failed (import itself is unaffected): %s", e)
+
+
 def _store_and_recalculate(book, meta, also=None):
     """Write the book, recompute every screen.
 
@@ -311,6 +339,7 @@ async def import_holdings(file: UploadFile = File(...)):
         meta["holdings"] = len(holdings)
         meta.setdefault("sourceFiles", {})["holdings"] = file.filename
 
+        _quick_refresh_prices(book)
         _store_and_recalculate(book, meta, also=lambda: drive.write_bytes(HOLDINGS_XLSX, data, XLSX_MIME))
     except DriveError as e:
         raise HTTPException(503, str(e))
@@ -369,6 +398,7 @@ async def import_trades(file: UploadFile = File(...)):
         meta["trades"] = len(merged)
         meta.setdefault("sourceFiles", {})["trades"] = file.filename
 
+        _quick_refresh_prices(book)   # a placeholder holding above needs a price too
         _store_and_recalculate(book, meta, also=lambda: drive.write_bytes(TRADES_XLSX, data, XLSX_MIME))
     except DriveError as e:
         raise HTTPException(503, str(e))

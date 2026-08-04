@@ -62,9 +62,15 @@ def xlsx(sheet, header, rows):
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
     for f in os.listdir(os.path.join(TMP, "Portfolio")) if os.path.isdir(os.path.join(TMP, "Portfolio")) else []:
         os.remove(os.path.join(TMP, "Portfolio", f))
+    # Every holdings/trades import now fires a real Yahoo Finance call
+    # (_quick_refresh_prices) -- stubbed here so the whole suite doesn't
+    # pay real network latency (or flakiness) on every single import test.
+    # A dedicated test below overrides this to exercise the real merge.
+    import build_signals
+    monkeypatch.setattr(build_signals, "quick_prices", lambda holdings: ({}, []))
     with TestClient(app) as c:          # startup event runs drive.connect()
         drive.write_json(drive.SIGNALS_JSON, FEED)
         yield c
@@ -726,6 +732,26 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     assert len(calls) == 1
     assert calls[0].full_url == "https://api.github.com/repos/me/repo/actions/workflows/update-signals.yml/dispatches"
+
+
+def test_quick_price_refresh_patches_cmp_but_preserves_factor_scores(client, monkeypatch):
+    """The real point of quick_prices(): update cmp/mcap/lo/hi for the
+    book's own holdings immediately, WITHOUT touching val/momo/qual/beta
+    -- those need the full 750-symbol cross-sectional job to mean
+    anything and must survive untouched until that job next runs."""
+    import build_signals
+    monkeypatch.setattr(build_signals, "quick_prices",
+                        lambda holdings: ({"ALPHACHEM": {"cmp": 999.0, "mcap": 5000, "lo": 400.0, "hi": 1000.0}}, []))
+
+    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+
+    sig = client.get("/api/signals").json()["signals"]["ALPHACHEM"]
+    assert sig["cmp"] == 999.0 and sig["mcap"] == 5000                 # patched
+    assert sig["val"] == FEED["signals"]["ALPHACHEM"]["val"]           # untouched
+    assert sig["beta"] == FEED["signals"]["ALPHACHEM"]["beta"]         # untouched
+    # the P&L on the very same response already reflects the new price
+    pos = next(p for p in client.get("/api/positions").json()["positions"] if p["tk"] == "ALPHACHEM")
+    assert pos["cmp"] == 999.0
 
 
 def test_export_trades_filters_by_date_range(client):

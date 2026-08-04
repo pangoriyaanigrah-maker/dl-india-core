@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import json
 import logging
+import os
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -207,6 +210,31 @@ def _run_concurrently(critical=(), best_effort=()):
             f.result()
 
 
+def _trigger_signals_refresh():
+    """Best-effort: ask the existing update-signals GitHub Actions workflow
+    to run now, instead of waiting for its 18:00 IST schedule -- a ticker
+    added by this import has no price/z-score until that job runs. Reuses
+    the workflow's own workflow_dispatch trigger (already there for the
+    manual "Run workflow" button) rather than re-fetching prices inline:
+    that fetch takes 30s+ against 750+ symbols, far past what a request
+    handler (and Vercel's function timeout) should ever wait on.
+
+    Needs GITHUB_TOKEN (repo-scoped, "Actions: write") and GITHUB_REPO
+    ("owner/repo") set as env vars; skipped silently if either is absent,
+    same as sheets.py's own optional integrations."""
+    token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPO")
+    if not (token and repo):
+        return
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/update-signals.yml/dispatches"
+    body = json.dumps({"ref": os.environ.get("GITHUB_BRANCH", "master")}).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        log.warning("could not trigger update-signals workflow (import itself is unaffected): %s", e)
+
+
 def _store_and_recalculate(book, meta, also=None):
     """Write the book, recompute every screen.
 
@@ -284,6 +312,7 @@ async def import_holdings(file: UploadFile = File(...)):
     except DriveError as e:
         raise HTTPException(503, str(e))
 
+    _trigger_signals_refresh()
     log.info("holdings import %s: %d rows, %d rejected", file.filename, len(holdings), len(errors))
     return {"file": file.filename, "holdings": len(holdings), "trades": len(book["trades"]),
             "cash": book["cash"], "errors": errors}
@@ -341,6 +370,7 @@ async def import_trades(file: UploadFile = File(...)):
     except DriveError as e:
         raise HTTPException(503, str(e))
 
+    _trigger_signals_refresh()
     log.info("trades import %s: %d added, %d duplicates, %d placeholders, %d rejected",
              file.filename, added, dupes, len(placeholders), len(errors))
     return {"file": file.filename, "added": added, "duplicates": dupes,

@@ -236,24 +236,48 @@ def _trigger_signals_refresh():
     if not (token and repo):
         missing = " and ".join(n for n, v in (("GITHUB_TOKEN", token), ("GITHUB_REPO", repo)) if not v)
         return f"not configured ({missing} unset) — full signal refresh will wait for the nightly job"
-    ref = os.environ.get("GITHUB_BRANCH", "main")
+    # Pasting into a hosting dashboard's env-var box picks up stray spaces,
+    # newlines and quotes far too easily, and "owner/repo" silently becomes
+    # a 404 that reads exactly like a permissions problem. Also accept a
+    # full repo URL, since that's the thing actually in the clipboard.
+    token, repo = token.strip().strip('"\''), repo.strip().strip('"\'').rstrip("/")
+    if "github.com/" in repo:
+        repo = repo.split("github.com/", 1)[1]
+
+    # Which branch to dispatch against. The two repos this has been
+    # deployed from disagree (main vs master), so rather than make that a
+    # setting someone has to know about, try the configured/likely one and
+    # fall back to the other -- a wrong ref 404s identically to a missing
+    # repo, which is exactly the confusion that cost hours here.
+    configured = os.environ.get("GITHUB_BRANCH", "").strip()
+    refs = [configured] if configured else ["main", "master"]
+
     url = f"https://api.github.com/repos/{repo}/actions/workflows/update-signals.yml/dispatches"
-    req = urllib.request.Request(url, data=json.dumps({"ref": ref}).encode(), method="POST",
-                                 headers={"Authorization": f"Bearer {token}",
-                                          "Accept": "application/vnd.github+json"})
-    try:
-        urllib.request.urlopen(req, timeout=10)
-        return "queued"
-    except Exception as e:
-        detail = ""
-        body = getattr(e, "read", None)
-        if body:                        # HTTPError carries GitHub's own reason
-            try:
-                detail = f" — {json.loads(body()).get('message', '')}"
-            except Exception:
-                pass
-        log.warning("could not trigger update-signals workflow (import unaffected): %s%s", e, detail)
-        return f"failed: {e}{detail} (repo={repo!r}, ref={ref!r})"
+    last = ""
+    for ref in refs:
+        req = urllib.request.Request(
+            url, data=json.dumps({"ref": ref}).encode(), method="POST",
+            # Content-Type matters: urllib defaults a POST body to
+            # x-www-form-urlencoded, which is NOT what the GitHub API
+            # accepts here -- this was silently mis-set until now.
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json",
+                     "Content-Type": "application/json",
+                     "X-GitHub-Api-Version": "2022-11-28"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            return "queued"
+        except Exception as e:
+            detail = ""
+            body = getattr(e, "read", None)
+            if body:                    # HTTPError carries GitHub's own reason
+                try:
+                    detail = f" — {json.loads(body()).get('message', '')}"
+                except Exception:
+                    pass
+            last = f"failed: {e}{detail} (repo={repo!r}, ref={ref!r})"
+            log.warning("could not trigger update-signals workflow (import unaffected): %s%s", e, detail)
+    return last
 
 
 def _quick_refresh_prices(book):

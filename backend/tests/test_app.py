@@ -734,11 +734,19 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     assert "not configured" in r.json()["signalRefresh"]
     assert "GITHUB_TOKEN" in r.json()["signalRefresh"]
 
-    monkeypatch.setenv("GITHUB_TOKEN", "t"), monkeypatch.setenv("GITHUB_REPO", "me/repo")
+    # Deliberately messy values -- a quoted, padded repo URL is what
+    # actually ends up pasted into a hosting dashboard's env-var box, and
+    # it used to 404 in a way indistinguishable from a bad token.
+    monkeypatch.setenv("GITHUB_TOKEN", "  t\n"), monkeypatch.setenv("GITHUB_REPO", ' "https://github.com/me/repo/" ')
     r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     assert len(calls) == 1
     assert calls[0].full_url == "https://api.github.com/repos/me/repo/actions/workflows/update-signals.yml/dispatches"
     assert r.json()["signalRefresh"] == "queued"
+    # urllib defaults a POST body to x-www-form-urlencoded; the GitHub API
+    # needs JSON here, and the mismatch was silent.
+    assert calls[0].get_header("Content-type") == "application/json"
+    assert calls[0].get_header("Authorization") == "Bearer t"       # whitespace stripped
+    assert json.loads(calls[0].data)["ref"] == "main"
 
     # a rejected dispatch (bad token, wrong ref, ...) must surface the
     # reason and the repo/ref it tried, not vanish into a server log

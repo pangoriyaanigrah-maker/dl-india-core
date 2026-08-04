@@ -226,7 +226,10 @@ def _trigger_signals_refresh():
     if not (token and repo):
         return
     url = f"https://api.github.com/repos/{repo}/actions/workflows/update-signals.yml/dispatches"
-    body = json.dumps({"ref": os.environ.get("GITHUB_BRANCH", "master")}).encode()
+    # ponytail: "main" fits the repo actually running this trigger
+    # (dl-india-portfolio-dashboard); dl-india-core still uses "master" --
+    # set GITHUB_BRANCH explicitly wherever that's the deployed target.
+    body = json.dumps({"ref": os.environ.get("GITHUB_BRANCH", "main")}).encode()
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
     try:

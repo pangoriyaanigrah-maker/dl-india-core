@@ -9,6 +9,7 @@ import io
 import json
 import os
 import tempfile
+import urllib.error
 
 import openpyxl
 import pytest
@@ -725,13 +726,28 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     calls = []
     monkeypatch.setattr(api.urllib.request, "urlopen", lambda req, timeout=10: calls.append(req))
 
-    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     assert calls == []   # not configured -- must not attempt a call
+    # ...and must SAY it didn't, naming what's missing: a silently skipped
+    # refresh is indistinguishable from a working one, which is exactly
+    # how stale factor scores went unnoticed on a real deployment.
+    assert "not configured" in r.json()["signalRefresh"]
+    assert "GITHUB_TOKEN" in r.json()["signalRefresh"]
 
     monkeypatch.setenv("GITHUB_TOKEN", "t"), monkeypatch.setenv("GITHUB_REPO", "me/repo")
-    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     assert len(calls) == 1
     assert calls[0].full_url == "https://api.github.com/repos/me/repo/actions/workflows/update-signals.yml/dispatches"
+    assert r.json()["signalRefresh"] == "queued"
+
+    # a rejected dispatch (bad token, wrong ref, ...) must surface the
+    # reason and the repo/ref it tried, not vanish into a server log
+    def boom(req, timeout=10):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+    monkeypatch.setattr(api.urllib.request, "urlopen", boom)
+    r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    status = r.json()["signalRefresh"]
+    assert status.startswith("failed:") and "404" in status and "me/repo" in status
 
 
 def test_quick_price_refresh_patches_cmp_but_preserves_factor_scores(client, monkeypatch):

@@ -220,26 +220,40 @@ def _trigger_signals_refresh():
     added by this import has no price/z-score until that job runs. Reuses
     the workflow's own workflow_dispatch trigger (already there for the
     manual "Run workflow" button) rather than re-fetching prices inline:
-    that fetch takes 30s+ against 750+ symbols, far past what a request
+    that fetch takes ~100s against 750+ symbols, far past what a request
     handler (and Vercel's function timeout) should ever wait on.
 
     Needs GITHUB_TOKEN (repo-scoped, "Actions: write") and GITHUB_REPO
-    ("owner/repo") set as env vars; skipped silently if either is absent,
-    same as sheets.py's own optional integrations."""
+    ("owner/repo") set as env vars.
+
+    -> a short status string, surfaced in the import response. This used
+    to log-and-swallow, which on a serverless host means the failure is
+    invisible: the workflow silently never fires, signals never refresh,
+    and the dashboard just looks broken with nothing anywhere saying why.
+    Still never raises -- a failed trigger must not fail the import -- but
+    now it says so where someone can actually read it."""
     token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPO")
     if not (token and repo):
-        return
+        missing = " and ".join(n for n, v in (("GITHUB_TOKEN", token), ("GITHUB_REPO", repo)) if not v)
+        return f"not configured ({missing} unset) — full signal refresh will wait for the nightly job"
+    ref = os.environ.get("GITHUB_BRANCH", "main")
     url = f"https://api.github.com/repos/{repo}/actions/workflows/update-signals.yml/dispatches"
-    # ponytail: "main" fits the repo actually running this trigger
-    # (dl-india-portfolio-dashboard); dl-india-core still uses "master" --
-    # set GITHUB_BRANCH explicitly wherever that's the deployed target.
-    body = json.dumps({"ref": os.environ.get("GITHUB_BRANCH", "main")}).encode()
-    req = urllib.request.Request(url, data=body, method="POST", headers={
-        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, data=json.dumps({"ref": ref}).encode(), method="POST",
+                                 headers={"Authorization": f"Bearer {token}",
+                                          "Accept": "application/vnd.github+json"})
     try:
         urllib.request.urlopen(req, timeout=10)
+        return "queued"
     except Exception as e:
-        log.warning("could not trigger update-signals workflow (import itself is unaffected): %s", e)
+        detail = ""
+        body = getattr(e, "read", None)
+        if body:                        # HTTPError carries GitHub's own reason
+            try:
+                detail = f" — {json.loads(body()).get('message', '')}"
+            except Exception:
+                pass
+        log.warning("could not trigger update-signals workflow (import unaffected): %s%s", e, detail)
+        return f"failed: {e}{detail} (repo={repo!r}, ref={ref!r})"
 
 
 def _quick_refresh_prices(book):
@@ -344,10 +358,10 @@ async def import_holdings(file: UploadFile = File(...)):
     except DriveError as e:
         raise HTTPException(503, str(e))
 
-    _trigger_signals_refresh()
+    refresh = _trigger_signals_refresh()
     log.info("holdings import %s: %d rows, %d rejected", file.filename, len(holdings), len(errors))
     return {"file": file.filename, "holdings": len(holdings), "trades": len(book["trades"]),
-            "cash": book["cash"], "errors": errors}
+            "cash": book["cash"], "errors": errors, "signalRefresh": refresh}
 
 
 @router.post("/import/trades", tags=["import"], summary="Upload a trades file")
@@ -403,11 +417,12 @@ async def import_trades(file: UploadFile = File(...)):
     except DriveError as e:
         raise HTTPException(503, str(e))
 
-    _trigger_signals_refresh()
+    refresh = _trigger_signals_refresh()
     log.info("trades import %s: %d added, %d duplicates, %d placeholders, %d rejected",
              file.filename, added, dupes, len(placeholders), len(errors))
     return {"file": file.filename, "added": added, "duplicates": dupes,
-            "total": len(merged), "placeholderHoldings": placeholders, "errors": errors}
+            "total": len(merged), "placeholderHoldings": placeholders, "errors": errors,
+            "signalRefresh": refresh}
 
 
 @router.post("/import/cashflows", tags=["import"], summary="Upload a capital contributions/withdrawals file")

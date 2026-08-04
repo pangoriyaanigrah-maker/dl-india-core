@@ -901,9 +901,20 @@ function reportHTML(kind, r){
          <thead><tr><th>Row</th><th>Problem</th></tr></thead><tbody>
          ${errors.map(e=>`<tr><td>${e.row}</td><td class="wraptext">${esc(e.message)}</td></tr>`).join("")}
        </tbody></table></div>` : "";
+  // The background full-signal refresh (750+ symbols, ~100s) reports back
+  // here rather than failing silently -- a trigger that never fires used
+  // to look identical to one that worked, leaving factor scores/beta
+  // stale with nothing on screen explaining why.
+  const rf = r.signalRefresh;
+  const refreshNote = !rf ? ""
+    : rf === "queued"
+      ? `<br><span style="color:var(--dim)">Full market refresh queued in the background — factor scores, beta and
+         benchmark update in ~2 min. Prices above are already live.</span>`
+      : `<br><span style="color:var(--amber)">Full market refresh not started: ${esc(rf)}</span>`;
   return `<div class="sec" style="margin-top:22px">${kind} <small>${esc(r.file)}</small></div>
     <div class="panel">${bits.filter(Boolean).join(" · ") || "nothing to change"}
       ${errors.length ? `<br><b style="color:var(--down)">${errors.length} row(s) rejected:</b>` : ""}
+      ${refreshNote}
     </div>${errs}`;
 }
 async function savePermanently(){

@@ -263,6 +263,32 @@ def test_sheets_row_building_handles_missing_upside_and_xirr(client):
     assert row[1] == pytest.approx(nav["nav"])
 
 
+def test_sheets_ledger_rows_mirror_the_raw_book_no_computed_columns(client):
+    """holdings_rows()/trades_rows()/cashflows_rows() must be the book as
+    uploaded -- no CMP, no P&L, no status -- since these tabs exist
+    specifically so raw and computed data aren't mixed in one place."""
+    import sheets
+    book = {
+        "holdings": [{"tk": "ALPHACHEM", "co": "Alpha Chemicals", "sector": "Materials",
+                      "industry": "Specialty", "analyst": "Dev", "qty": 400, "wt": 0.08,
+                      "fullWt": 0.10, "tp": 620, "addLvl": 480, "conv": "High",
+                      "thesis": "t", "strategy": "s", "yfSymbol": None}],
+        "trades": [{"date": "2026-01-15", "tk": "ALPHACHEM", "side": "Buy", "qty": 400,
+                    "price": 505.0, "costs": 202.0}],
+        "cashflows": [{"date": "2026-01-01", "type": "Contribution", "amount": 500000, "note": "Seed"}],
+    }
+    h_rows = sheets.holdings_rows(book)
+    assert h_rows[0] == sheets.HOLDINGS_HEADER
+    assert h_rows[1][0] == "ALPHACHEM" and h_rows[1][6] == 8.0   # weight written as percent, not fraction
+    assert "CMP" not in sheets.HOLDINGS_HEADER and "Status" not in sheets.HOLDINGS_HEADER
+
+    t_rows = sheets.trades_rows(book)
+    assert t_rows == [sheets.TRADES_HEADER, ["2026-01-15", "ALPHACHEM", "Buy", 400, 505.0, 202.0]]
+
+    c_rows = sheets.cashflows_rows(book)
+    assert c_rows == [sheets.CASHFLOWS_HEADER, ["2026-01-01", "Contribution", 500000, "Seed"]]
+
+
 def test_cashflows_export_round_trips(client):
     up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     up(client, "trades", xlsx("Trades", T_HDR, TRADES))

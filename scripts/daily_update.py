@@ -74,6 +74,8 @@ def run(fetch: bool = True) -> int:
         # not on every import).
         sheets.sync_current(derived)
         sheets.append_history(derived)
+        sheets.sync_ledgers(sheets.CURRENT_SHEET, book)
+        sheets.sync_ledgers(sheets.HISTORY_SHEET, book)
 
         d = derived["dashboard"]
         log.info("done in %.1fs — %d holdings, value %.0f, P&L %.0f",

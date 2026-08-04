@@ -5,15 +5,22 @@ constraint as everything else here -- the service account can't create new
 files, only update existing ones) and looked up by name in the Portfolio
 folder afterward:
 
-    Current   overwritten on every import/recalc -- today's snapshot
-    History   one row appended per day the evening job runs, deduped by
-              date so a manual re-run the same day updates the row instead
+    Current   Sheet1: computed snapshot, overwritten on every import/recalc
+              Holdings/Trades/Cashflow: the raw ledgers as uploaded (no
+              CMP, P&L or other computed columns), same trigger
+    History   Sheet1: one row appended per day the evening job runs,
+              deduped by date so a same-day re-run updates the row instead
               of duplicating it
+              Holdings/Trades/Cashflow: the same raw ledgers, overwritten
+              once/day alongside it -- these tabs don't accumulate history
+              of their own, they're just the latest ledger state mirrored
+              onto both spreadsheets
 
-Never required for the app to work: if a sheet doesn't exist yet, sync is
-skipped (logged once) rather than erroring -- same reasoning as the
-archival .xlsx copies in api.py. A no-op entirely under DRIVE_LOCAL_DIR
-(tests, local dev without Google credentials).
+Never required for the app to work: if a sheet (or a tab within one)
+doesn't exist yet, sync is skipped or the tab is created automatically --
+never errors out, same reasoning as the archival .xlsx copies in api.py.
+A no-op entirely under DRIVE_LOCAL_DIR (tests, local dev without Google
+credentials).
 """
 from __future__ import annotations
 
@@ -30,6 +37,15 @@ TAB = "Sheet1"
 
 HISTORY_HEADER = ["Date", "NAV", "Cash Balance", "Holdings Value", "Total P&L", "Realized",
                    "Unrealized", "Cash %", "Equity %", "XIRR", "Holdings Count"]
+
+# Raw ledger tabs -- same column layout parser.to_holdings_xlsx() /
+# to_trades_xlsx() / to_cashflows_xlsx() write, no computed columns (no
+# CMP, no P&L, no status). These mirror the book exactly as uploaded.
+LEDGER_TABS = ("Holdings", "Trades", "Cashflow")
+HOLDINGS_HEADER = ["Ticker", "Company", "Sector", "Industry", "Analyst", "Qty", "Weight",
+                    "FullWeight", "Target", "AddLevel", "Conviction", "Thesis", "Strategy", "YfSymbol"]
+TRADES_HEADER = ["Date", "Ticker", "Side", "Qty", "Price", "Costs"]
+CASHFLOWS_HEADER = ["Date", "Type", "Amount", "Note"]
 
 _warned = set()
 
@@ -96,6 +112,30 @@ def history_row(derived):
     ]
 
 
+def holdings_rows(book):
+    rows = [HOLDINGS_HEADER]
+    for h in book["holdings"]:
+        rows.append([h.get("tk"), h.get("co"), h.get("sector"), h.get("industry"), h.get("analyst"),
+                     h.get("qty"), _n((h.get("wt") or 0) * 100), _n((h.get("fullWt") or 0) * 100),
+                     h.get("tp"), h.get("addLvl"), h.get("conv"), h.get("thesis"), h.get("strategy"),
+                     h.get("yfSymbol")])
+    return rows
+
+
+def trades_rows(book):
+    rows = [TRADES_HEADER]
+    for t in book["trades"]:
+        rows.append([t.get("date"), t.get("tk"), t.get("side"), t.get("qty"), t.get("price"), t.get("costs")])
+    return rows
+
+
+def cashflows_rows(book):
+    rows = [CASHFLOWS_HEADER]
+    for c in book.get("cashflows", []):
+        rows.append([c.get("date"), c.get("type"), c.get("amount"), c.get("note")])
+    return rows
+
+
 # ------------------------------------------------------------------ sync
 def sync_current(derived):
     """Best-effort: overwrite the Current sheet with today's snapshot."""
@@ -142,3 +182,41 @@ def append_history(derived):
             insertDataOption="INSERT_ROWS", body={"values": [row]}).execute()
     except Exception as e:
         log.warning("History sheet sync failed (dashboard itself is unaffected): %s", e)
+
+
+def _ensure_tabs(svc, sid, names):
+    """A tab has to exist before values().update can address it by name --
+    unlike Sheet1 (created for free with the spreadsheet), Holdings/Trades/
+    Cashflow need to be added once. Checked and created together so a
+    fresh sheet only costs one extra round trip, not three."""
+    meta = svc.spreadsheets().get(spreadsheetId=sid, fields="sheets.properties.title").execute()
+    existing = {s["properties"]["title"] for s in meta.get("sheets", [])}
+    missing = [n for n in names if n not in existing]
+    if missing:
+        svc.spreadsheets().batchUpdate(spreadsheetId=sid, body={
+            "requests": [{"addSheet": {"properties": {"title": n}}} for n in missing]}).execute()
+
+
+def _write_tab(svc, sid, tab, rows):
+    svc.spreadsheets().values().clear(spreadsheetId=sid, range=tab, body={}).execute()
+    svc.spreadsheets().values().update(
+        spreadsheetId=sid, range=f"{tab}!A1", valueInputOption="RAW", body={"values": rows}).execute()
+
+
+def sync_ledgers(sheet_name, book):
+    """Best-effort: mirror the raw holdings/trades/cashflows ledgers -- as
+    uploaded, no computed columns -- onto the Holdings/Trades/Cashflow tabs
+    of the given spreadsheet (CURRENT_SHEET or HISTORY_SHEET). Same
+    clear-and-rewrite semantics as sync_current: safe to call repeatedly,
+    never duplicates a row."""
+    try:
+        svc = _service()
+        sid = svc and _sheet_id(sheet_name)
+        if not (svc and sid):
+            return
+        _ensure_tabs(svc, sid, LEDGER_TABS)
+        _write_tab(svc, sid, "Holdings", holdings_rows(book))
+        _write_tab(svc, sid, "Trades", trades_rows(book))
+        _write_tab(svc, sid, "Cashflow", cashflows_rows(book))
+    except Exception as e:
+        log.warning("%s ledger tabs sync failed (dashboard itself is unaffected): %s", sheet_name, e)

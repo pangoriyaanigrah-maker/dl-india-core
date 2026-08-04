@@ -217,7 +217,8 @@ def _store_and_recalculate(book, meta, also=None):
 
     _run_concurrently(critical=[lambda: drive.write_json(DASHBOARD_JSON, derived)],
                       best_effort=[lambda: drive.write_json(METADATA_JSON, meta),
-                                   lambda: sheets.sync_current(derived)])
+                                   lambda: sheets.sync_current(derived),
+                                   lambda: sheets.sync_ledgers(sheets.CURRENT_SHEET, book)])
     return derived
 
 

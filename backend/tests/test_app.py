@@ -674,6 +674,19 @@ def test_drive_failure_surfaces_as_503_not_a_crash(client, monkeypatch):
     assert r.status_code == 503 and "Drive is down" in r.json()["detail"]
 
 
+def test_store_reconnects_lazily_if_startup_never_ran(client, monkeypatch):
+    """The real bug this fixes: some serverless ASGI runtimes never fire
+    FastAPI's startup/lifespan event at all, so drive.connect() never runs
+    and every request used to fail with a generic 'not connected' error
+    forever -- not the actual reason (missing creds, API disabled, ...),
+    and not self-healing. store() must reconnect on first use instead of
+    just trusting startup already happened."""
+    drive._store = None   # simulate startup never having fired
+    r = client.get("/api/dashboard")
+    assert r.status_code == 200
+    assert drive._store is not None   # reconnected, not left broken
+
+
 def test_archival_copy_failure_does_not_mask_a_successful_import(client, monkeypatch):
     """The exact bug found while building the cashflows feature: the
     archival .xlsx write is best-effort (nothing reads it to compute

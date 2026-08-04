@@ -283,6 +283,7 @@ class DriveStore:
 
 # ------------------------------------------------------------------ init
 _store = None
+_connect_lock = threading.Lock()
 
 
 def _credentials():
@@ -342,8 +343,25 @@ def connect():
 
 
 def store():
+    """connect() is meant to run once at startup (see main.py's startup
+    event), but that only actually fires on platforms whose ASGI runtime
+    implements the lifespan protocol -- several serverless Python runtimes
+    (Vercel's included) invoke the app per-request without ever sending a
+    lifespan.startup message, so the event handler silently never runs and
+    _store stays None forever. Connecting lazily here means the first real
+    request pays connect()'s cost instead of every request failing with a
+    generic "not connected" -- and whatever connect() actually raises
+    (missing credentials, Drive API disabled, ...) surfaces as the real
+    reason instead of being masked by that message."""
+    global _store
     if _store is None:
-        raise DriveError("storage not connected — connect() runs on startup")
+        # Double-checked: FastAPI runs sync endpoints in a threadpool, so
+        # a cold start can see several requests hit this at once. Only the
+        # first should pay for ensure_folder()/prime(); the rest just wait
+        # and reuse what it built instead of each redoing that work.
+        with _connect_lock:
+            if _store is None:
+                connect()
     return _store
 
 

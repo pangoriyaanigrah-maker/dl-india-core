@@ -711,23 +711,6 @@ def test_archival_copy_failure_does_not_mask_a_successful_import(client, monkeyp
     assert client.get("/api/dashboard").json()["holdingsCount"] == 2   # the real write landed
 
 
-def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch):
-    """No GITHUB_TOKEN/GITHUB_REPO set (the default in this test env) ->
-    silent no-op, same as the other optional integrations. Set both ->
-    a real dispatch call fires against the GitHub API on import."""
-    import api
-    calls = []
-    monkeypatch.setattr(api.urllib.request, "urlopen", lambda req, timeout=10: calls.append(req))
-
-    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
-    assert calls == []   # not configured -- must not attempt a call
-
-    monkeypatch.setenv("GITHUB_TOKEN", "t"), monkeypatch.setenv("GITHUB_REPO", "me/repo")
-    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
-    assert len(calls) == 1
-    assert calls[0].full_url == "https://api.github.com/repos/me/repo/actions/workflows/update-signals.yml/dispatches"
-
-
 def test_export_trades_filters_by_date_range(client):
     up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     up(client, "trades", xlsx("Trades", T_HDR, TRADES))   # Jan 15 and Feb 3

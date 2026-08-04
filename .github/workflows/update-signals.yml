@@ -4,7 +4,14 @@
 name: update-signals
 
 permissions:
-  issues: write   # only the failure-notification step needs this
+  contents: read   # actions/checkout needs this explicitly -- once ANY
+  # permissions: block is declared, every unlisted scope drops to none
+  # instead of inheriting the repo default. A public repo still clones
+  # fine with a scopeless token (public repos need no auth to read at
+  # all); a private one genuinely can't, and git reports that as
+  # "repository not found" rather than "permission denied" -- same
+  # message a private repo gives to anyone with zero access, on purpose.
+  issues: write    # only the failure-notification step needs this
 
 on:
   schedule:

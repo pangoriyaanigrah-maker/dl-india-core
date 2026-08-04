@@ -232,9 +232,18 @@ def _trigger_signals_refresh():
     and the dashboard just looks broken with nothing anywhere saying why.
     Still never raises -- a failed trigger must not fail the import -- but
     now it says so where someone can actually read it."""
-    token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPO")
-    if not (token and repo):
-        missing = " and ".join(n for n, v in (("GITHUB_TOKEN", token), ("GITHUB_REPO", repo)) if not v)
+    token = os.environ.get("GITHUB_TOKEN")
+    # Vercel already publishes which repo the running deployment was built
+    # from, so GITHUB_REPO is only a manual override -- one less variable to
+    # set, and one less to typo. (It went unset on a real deployment while
+    # the token was fine, which is precisely the failure this removes.)
+    repo = os.environ.get("GITHUB_REPO") or "/".join(
+        p for p in (os.environ.get("VERCEL_GIT_REPO_OWNER"),
+                    os.environ.get("VERCEL_GIT_REPO_SLUG")) if p)
+    if not (token and repo and "/" in repo):
+        missing = " and ".join(n for n, v in
+                               (("GITHUB_TOKEN", token), ("GITHUB_REPO", repo if "/" in (repo or "") else None))
+                               if not v)
         return f"not configured ({missing} unset) — full signal refresh will wait for the nightly job"
     # Pasting into a hosting dashboard's env-var box picks up stray spaces,
     # newlines and quotes far too easily, and "owner/repo" silently becomes
@@ -244,12 +253,14 @@ def _trigger_signals_refresh():
     if "github.com/" in repo:
         repo = repo.split("github.com/", 1)[1]
 
-    # Which branch to dispatch against. The two repos this has been
-    # deployed from disagree (main vs master), so rather than make that a
-    # setting someone has to know about, try the configured/likely one and
-    # fall back to the other -- a wrong ref 404s identically to a missing
-    # repo, which is exactly the confusion that cost hours here.
-    configured = os.environ.get("GITHUB_BRANCH", "").strip()
+    # Which branch to dispatch against. VERCEL_GIT_COMMIT_REF is the branch
+    # this deployment was actually built from -- the correct answer, for
+    # free. The two repos this has been deployed from disagree (main vs
+    # master), so without it fall back to trying both rather than making it
+    # a setting someone has to know about: a wrong ref 404s identically to
+    # a missing repo, which is exactly the confusion that cost hours here.
+    configured = (os.environ.get("GITHUB_BRANCH")
+                  or os.environ.get("VERCEL_GIT_COMMIT_REF") or "").strip()
     refs = [configured] if configured else ["main", "master"]
 
     url = f"https://api.github.com/repos/{repo}/actions/workflows/update-signals.yml/dispatches"

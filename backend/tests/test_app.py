@@ -734,6 +734,22 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     assert "not configured" in r.json()["signalRefresh"]
     assert "GITHUB_TOKEN" in r.json()["signalRefresh"]
 
+    # Vercel publishes the repo/branch it deployed, so a token alone is
+    # enough -- GITHUB_REPO going unset (while the token was fine) is the
+    # exact failure seen on the real deployment.
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("VERCEL_GIT_REPO_OWNER", "jprasham")
+    monkeypatch.setenv("VERCEL_GIT_REPO_SLUG", "dl-india-portfolio-dashboard")
+    monkeypatch.setenv("VERCEL_GIT_COMMIT_REF", "main")
+    r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    assert r.json()["signalRefresh"] == "queued"
+    assert calls[-1].full_url == ("https://api.github.com/repos/jprasham/dl-india-portfolio-dashboard"
+                                   "/actions/workflows/update-signals.yml/dispatches")
+    assert json.loads(calls[-1].data)["ref"] == "main"
+    for v in ("VERCEL_GIT_REPO_OWNER", "VERCEL_GIT_REPO_SLUG", "VERCEL_GIT_COMMIT_REF"):
+        monkeypatch.delenv(v)
+    calls.clear()
+
     # Deliberately messy values -- a quoted, padded repo URL is what
     # actually ends up pasted into a hosting dashboard's env-var box, and
     # it used to 404 in a way indistinguishable from a bad token.

@@ -305,7 +305,10 @@ def constituents():
     return out
 
 
-INFO_WORKERS = 20   # ponytail: fixed pool size, tune if Yahoo starts throttling
+INFO_WORKERS = 40   # ponytail: measured against real Yahoo Finance (100 symbols:
+# 20 workers = 11.5s, 40 = 3.7s, 60 = 3.7s -- no further gain past 40, and
+# 100/100 resolved at every level tested, no throttling observed. Retune
+# down if that ever changes.
 
 
 def fetch(symbols, timeout=None, skip_info=False, period="5y"):

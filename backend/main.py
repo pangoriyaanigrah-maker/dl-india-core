@@ -13,10 +13,20 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 import uuid
 
 from pathlib import Path
+
+# `uvicorn main:app` run from inside backend/ puts this directory on
+# sys.path for free; a serverless platform importing this file from a
+# different working directory (Vercel's Python runtime, notably) doesn't
+# necessarily give the same guarantee. Without this, `import drive` below
+# fails at module load -- before any route runs, so every single request
+# 500s identically. Same defensive line scripts/daily_update.py already
+# needed for the same reason.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,6 +153,18 @@ class NoCacheStaticFiles(StaticFiles):
 
 # Serve the dashboard too, so `uvicorn main:app` is the whole app locally --
 # one origin, so no CORS and no API_BASE to set. In production GitHub Pages
-# serves index.html and this mount simply goes unused. Mounted LAST: the
-# routes above win, this catches everything else.
-app.mount("/", NoCacheStaticFiles(directory=REPO_ROOT, html=True), name="dashboard")
+# (or a separate Vercel static build) serves index.html and this mount goes
+# unused. Mounted LAST: the routes above win, this catches everything else.
+#
+# StaticFiles raises at construction if the directory doesn't exist -- and
+# this runs at import time, not inside a request handler, so on a platform
+# that doesn't preserve REPO_ROOT's layout (a serverless bundler that
+# packages files differently than the git checkout) that exception used to
+# take the ENTIRE app down before a single route could run: every request
+# crashed identically, API included, not just the pages this mount serves.
+# The API must survive that regardless of whether static serving does.
+try:
+    app.mount("/", NoCacheStaticFiles(directory=REPO_ROOT, html=True), name="dashboard")
+except RuntimeError as e:
+    log.warning("static dashboard mount skipped (%s) -- /api/* still works, "
+                "the frontend must be hosted separately", e)

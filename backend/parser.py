@@ -339,3 +339,15 @@ def to_cashflows_xlsx(cashflows: list[dict]):
     for c in cashflows:
         ws.append([c.get("date"), c.get("type"), c.get("amount"), c.get("note")])
     return wb
+
+
+def to_multi_tab_xlsx(tabs: dict[str, list[list]]):
+    """One sheet per (tab name, rows) pair -- used to hand back a Google
+    Sheet's own tabs as a local .xlsx, same tab names, no reshaping."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for name, rows in tabs.items():
+        ws = wb.create_sheet(name[:31])   # Excel's own sheet-name length limit
+        for row in rows:
+            ws.append(row)
+    return wb

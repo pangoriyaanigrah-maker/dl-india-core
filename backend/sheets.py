@@ -220,3 +220,19 @@ def sync_ledgers(sheet_name, book):
         _write_tab(svc, sid, "Cashflow", cashflows_rows(book))
     except Exception as e:
         log.warning("%s ledger tabs sync failed (dashboard itself is unaffected): %s", sheet_name, e)
+
+
+def read_all_tabs(sheet_name):
+    """-> {tab name: [[row values...], ...]} for every tab a sync ever
+    writes to CURRENT_SHEET/HISTORY_SHEET, or None if the sheet or the
+    Sheets API itself isn't reachable. Read-only, used only by the
+    download-a-copy endpoint -- not best-effort like the sync functions,
+    since a failed read here should surface as an error to whoever asked
+    for the download, not be silently swallowed."""
+    svc = _service()
+    sid = svc and _sheet_id(sheet_name)
+    if not (svc and sid):
+        return None
+    tabs = (TAB,) + LEDGER_TABS
+    resp = svc.spreadsheets().values().batchGet(spreadsheetId=sid, ranges=list(tabs)).execute()
+    return {tabs[i]: vr.get("values", []) for i, vr in enumerate(resp.get("valueRanges", []))}

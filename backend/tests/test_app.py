@@ -289,6 +289,31 @@ def test_sheets_ledger_rows_mirror_the_raw_book_no_computed_columns(client):
     assert c_rows == [sheets.CASHFLOWS_HEADER, ["2026-01-01", "Contribution", 500000, "Seed"]]
 
 
+def test_export_history_503s_when_the_sheet_is_unreachable(client):
+    """Under the local test backend there's no Google Sheets API at all --
+    read_all_tabs() returns None, and the endpoint must say so with a
+    503, not a 200 full of nothing or an unhandled crash."""
+    r = client.get("/api/export/history")
+    assert r.status_code == 503
+
+
+def test_export_history_returns_every_tab_when_the_sheet_is_reachable(client, monkeypatch):
+    import sheets
+    fake = {
+        sheets.TAB: [sheets.HISTORY_HEADER, ["2026-01-01", 100000, 5000, 95000, 0, 0, 0, 5.0, 95.0, 0.1, 3]],
+        "Holdings": sheets.holdings_rows({"holdings": []}),
+        "Trades": sheets.trades_rows({"holdings": [], "trades": []}),
+        "Cashflow": sheets.cashflows_rows({"holdings": [], "cashflows": []}),
+    }
+    monkeypatch.setattr(sheets, "read_all_tabs", lambda name: fake if name == sheets.HISTORY_SHEET else None)
+
+    r = client.get("/api/export/history")
+    assert r.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert set(wb.sheetnames) == {sheets.TAB, "Holdings", "Trades", "Cashflow"}
+    assert [c.value for c in next(wb[sheets.TAB].iter_rows())] == sheets.HISTORY_HEADER
+
+
 def test_cashflows_export_round_trips(client):
     up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     up(client, "trades", xlsx("Trades", T_HDR, TRADES))
@@ -581,6 +606,24 @@ def test_exposure_benchmark_aliases_indian_sector_labels_to_yahoos(client):
 def test_missing_sheet_gives_a_useful_422(client):
     r = up(client, "trades", xlsx("Wrong", T_HDR, TRADES))
     assert r.status_code == 422 and "No 'Trades' sheet" in r.json()["detail"]
+
+
+def test_validate_endpoint_matches_import_errors_but_writes_nothing(client):
+    """The real bug this exists to prevent: holdings + trades upload
+    together, holdings parses fine and trades doesn't -- without
+    validating first, holdings would already be saved by the time trades
+    fails, leaving a red error on screen with no hint that half the
+    upload actually went through. /api/validate/* must reject the exact
+    same bad file /api/import/* would, but touch nothing."""
+    bad_trades = xlsx("Wrong", T_HDR, TRADES)
+    r = client.post("/api/validate/trades", files={"file": ("f.xlsx", bad_trades, "application/octet-stream")})
+    assert r.status_code == 422 and "No 'Trades' sheet" in r.json()["detail"]
+    assert client.get("/api/dashboard").json()["tradesCount"] == 0   # nothing written
+
+    good_holdings = xlsx("Portfolio", H_HDR, HOLDINGS)
+    r2 = client.post("/api/validate/holdings", files={"file": ("f.xlsx", good_holdings, "application/octet-stream")})
+    assert r2.status_code == 200 and r2.json()["errors"] == []
+    assert client.get("/api/dashboard").json()["holdingsCount"] == 0   # still nothing written -- validate only
 
 
 def test_missing_required_column_gives_a_useful_422(client):

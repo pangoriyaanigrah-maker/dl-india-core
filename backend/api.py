@@ -151,6 +151,19 @@ def export_cashflows(from_date: str | None = None, to_date: str | None = None):
     return _xlsx_download(parser.to_cashflows_xlsx(cashflows), "cashflows_export.xlsx")
 
 
+@router.get("/export/history", tags=["export"], summary="Download the History Google Sheet as .xlsx")
+def export_history():
+    """The History sheet lives on Google Sheets, not Drive JSON/xlsx, so
+    this is the one export that isn't reading straight out of the book --
+    it reads the sheet back over the Sheets API and hands it back as a
+    local file with the same tabs (daily log + the raw ledger mirrors)."""
+    tabs = sheets.read_all_tabs(sheets.HISTORY_SHEET)
+    if tabs is None:
+        raise HTTPException(503, "The History Google Sheet isn't reachable right now -- check it "
+                                  "exists in the Portfolio folder and the service account can read it.")
+    return _xlsx_download(parser.to_multi_tab_xlsx(tabs), "history_export.xlsx")
+
+
 # ----------------------------------------------------------- imports
 async def _read(file: UploadFile) -> bytes:
     data = await file.read()
@@ -220,6 +233,30 @@ def _store_and_recalculate(book, meta, also=None):
                                    lambda: sheets.sync_current(derived),
                                    lambda: sheets.sync_ledgers(sheets.CURRENT_SHEET, book)])
     return derived
+
+
+_PARSERS = {"holdings": parser.parse_holdings, "trades": parser.parse_trades,
+            "cashflows": parser.parse_cashflows}
+
+
+@router.post("/validate/{kind}", tags=["import"], summary="Check a file parses cleanly, without saving anything")
+async def validate_import(kind: str, file: UploadFile = File(...)):
+    """Read-only: parses the file exactly as the real import would, but
+    never touches Drive -- lets the frontend confirm every file in a
+    holdings+trades(+cashflows) upload is individually valid BEFORE
+    committing any of them. Without this, a bad trades file uploaded
+    after a good holdings file left the holdings write already saved with
+    nothing to show for it but a red error message -- the exact opposite
+    of the "no partial upload" the Save Permanently dialog already
+    promises."""
+    if kind not in _PARSERS:
+        raise HTTPException(404, f"Unknown import kind {kind!r}.")
+    data = await _read(file)
+    try:
+        _, errors = _PARSERS[kind](data, file.filename)
+    except parser.ImportError_ as e:
+        raise HTTPException(422, str(e))
+    return {"file": file.filename, "errors": errors}
 
 
 @router.post("/import/holdings", tags=["import"], summary="Upload a holdings file")

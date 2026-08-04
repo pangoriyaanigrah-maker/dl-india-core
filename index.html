@@ -270,6 +270,10 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
       <button class="act ghost" onclick="document.getElementById('dl-from').value='';document.getElementById('dl-to').value='';updateDateFilteredLinks()">Clear</button>
     </div>
   </div>
+  <div class="sec" style="margin-top:26px">Download history <small>the daily NAV/P&L log + raw ledger mirrors from the History Google Sheet, not the current book above</small></div>
+  <div class="panel" style="margin-bottom:18px">
+    <div class="btnrow"><a class="act ghost" id="dl-history" download>Download history.xlsx</a></div>
+  </div>
   <div class="panel" id="ghpanel"></div>
   <div class="imp-note">
     <b>Division of labour:</b> analysts own weights, targets, theses and entry/exit strategy (holdings file);
@@ -294,6 +298,7 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
    same-origin, which is what a local `uvicorn main:app` gives you. */
 const API_BASE = (window.API_BASE || "").replace(/\/$/, "");
 document.getElementById("dl-holdings").href = API_BASE + "/api/export/holdings";
+document.getElementById("dl-history").href = API_BASE + "/api/export/history";
 
 /* ================= API CLIENT =================
    Every backend call goes through here: timeout, retry with backoff,
@@ -732,17 +737,27 @@ function renderPerformance(){
       <td class="${r.ret>=0?"pos":"neg"}">${fmt.pct(r.ret)}</td></tr>`).join("")}
     </tbody>
   </table></div>
-  <div class="sec">Trade log <small>${p.tradeCount} executions · newest first</small></div>
-  <div class="twrap"><table class="ptable" style="min-width:520px">
-    <thead><tr><th>Date</th><th>Ticker</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th><th>Costs</th></tr></thead>
-    <tbody>
-    ${p.trades.map(t=>
-      `<tr><td>${fmt.d(t.date)}</td><td>${esc(t.tk)}</td>
-        <td class="${t.side==="Buy"?"pos":"neg"}">${esc(t.side)}</td>
-        <td>${t.qty.toLocaleString("en-IN")}</td><td>${fmt.inr(t.price)}</td>
-        <td>${fmt.inr(t.value)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("")}
-    </tbody>
-  </table></div>
+  <details style="margin-bottom:4px">
+    ${(()=>{
+      const RECENT = 15;
+      const recent = p.trades.slice(0, RECENT);   // already sorted newest-first
+      const hidden = p.trades.length - recent.length;
+      return `<summary class="sec" style="cursor:pointer">Trade log <small>latest ${recent.length} of ${p.tradeCount} executions — click to expand</small></summary>
+    <div class="twrap" style="margin-top:8px"><table class="ptable" style="min-width:520px">
+      <thead><tr><th>Date</th><th>Ticker</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th><th>Costs</th></tr></thead>
+      <tbody>
+      ${recent.map(t=>
+        `<tr><td>${fmt.d(t.date)}</td><td>${esc(t.tk)}</td>
+          <td class="${t.side==="Buy"?"pos":"neg"}">${esc(t.side)}</td>
+          <td>${t.qty.toLocaleString("en-IN")}</td><td>${fmt.inr(t.price)}</td>
+          <td>${fmt.inr(t.value)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("")}
+      </tbody>
+    </table></div>
+    ${hidden > 0 ? `<div class="foot" style="margin-top:6px">${hidden} older trade${hidden===1?"":"s"} not shown here — full ledger:
+      <a href="#" onclick="showView('imp');return false" style="color:var(--saffron)">download on the Import tab</a>,
+      or the Trades tab of the Current/History Google Sheet.</div>` : ""}`;
+    })()}
+  </details>
   <div class="foot">* ticker not in the price feed — marked at its last trade price.
   Realized P&L is FIFO — each sell is costed against its own oldest lots, so a later buy never
   rewrites an earlier sale's booked profit. Avg cost is the cost basis of the lots you still hold.
@@ -907,7 +922,25 @@ async function savePermanently(){
                `touching trade history. There is no undo button in the app — clear the Drive folder to wipe it later.`)) return;
 
   const msg = document.getElementById("msg"), preview = document.getElementById("preview");
-  msg.className = "msg ok"; msg.textContent = "Uploading…";
+  preview.innerHTML = ""; preview.style.display = "none";
+  msg.className = "msg ok"; msg.textContent = "Checking files…";
+
+  // Every file has to parse cleanly BEFORE any of them is saved -- otherwise
+  // a bad trades file uploaded after a good holdings file leaves holdings
+  // already written to Drive with nothing to show for it but a red error.
+  try{
+    for (const [kind, file] of jobs){
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      await API.post(`/api/validate/${kind}`, fd);
+    }
+  }catch(e){
+    msg.className = "msg err";
+    msg.textContent = "Nothing saved — " + e.message;
+    return;
+  }
+
+  msg.textContent = "Uploading…";
   let html = "";
   try{
     for (const [kind, file, label] of jobs){
@@ -916,8 +949,13 @@ async function savePermanently(){
       html += reportHTML(label, await API.post(`/api/import/${kind}`, fd));
     }
   }catch(e){
+    // Validation already passed for every file, so this only fires on a
+    // genuine infra hiccup (Drive unreachable) mid-sequence, not a bad
+    // file -- rare, but a prior file in this same batch may already be
+    // saved. ponytail: no cross-file Drive transaction exists to roll
+    // that back with; say so plainly instead of pretending otherwise.
     msg.className = "msg err";
-    msg.textContent = "Import failed: " + e.message;
+    msg.textContent = "Saving failed partway through (" + e.message + ") — refresh and check what actually saved.";
     return;
   }
   preview.innerHTML = html;

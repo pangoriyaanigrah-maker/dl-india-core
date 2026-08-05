@@ -429,6 +429,22 @@ def num(d, *keys):
     return None
 
 
+def market_cap(info_d, last_price=None):
+    """Market cap in rupees, derived if not served directly.
+
+    Under load Yahoo returns a PARTIAL .info -- observed on real runs with
+    trailingPE and priceToBook present but marketCap simply absent, which
+    is why TCS and RELIANCE sat in "Unclassified" while their value
+    z-scores computed fine. Shares outstanding comes back in the same
+    payload, so multiply it by the last close rather than drop a stock out
+    of the size buckets over one missing field."""
+    mc = num(info_d, "marketCap")
+    if mc:
+        return mc
+    shares = num(info_d, "sharesOutstanding", "impliedSharesOutstanding")
+    return shares * last_price if (shares and last_price) else None
+
+
 def positive_num(d, *keys):
     """Like num(), but for a ratio that is only meaningful when positive --
     P/E, P/B, EV/EBITDA. A loss-making company prices to a negative P/E,
@@ -514,7 +530,7 @@ def build():
     # Score across the union of universe and holdings, so a portfolio name is
     # part of the cross-section rather than measured against a book it's absent from.
     scored = sorted(set(px) & (set(universe) | set(resolved.values())))
-    mcap = {s: (num(info[s], "marketCap") or 0) / 1e7 for s in scored}   # -> Rs crore
+    mcap = {s: (market_cap(info[s], px[s][-1]) or 0) / 1e7 for s in scored}   # -> Rs crore
 
     momo = zscores({s: momentum(px[s]) for s in scored}, clip=False)
     val = blend(*[{k: (-v if v is not None else None)
@@ -648,6 +664,13 @@ def selftest():
         "a loss-maker's negative P/E must not enter the value cross-section"
     assert positive_num({"trailingPE": 15.0}, "trailingPE") == 15.0
     assert positive_num({"trailingPE": 0.0}, "trailingPE") is None
+
+    # marketCap served directly wins; a partial payload (Yahoo does this
+    # under load) falls back to shares x price rather than "Unclassified".
+    assert market_cap({"marketCap": 8.7e12}, 2413.0) == 8.7e12
+    assert market_cap({"sharesOutstanding": 3618087518}, 2413.0) == 3618087518 * 2413.0
+    assert market_cap({"trailingPE": 16.7}, 2413.0) is None, "no shares, no derivation"
+    assert market_cap({"sharesOutstanding": 3618087518}, None) is None, "no price, no derivation"
 
     assert adv([]) is None, "no data must not fake a zero"
     assert adv([100.0] * 5) is None, "below minimum sample must be None"

@@ -27,6 +27,7 @@ import json
 import math
 import re
 import sys
+import time
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -305,10 +306,14 @@ def constituents():
     return out
 
 
-INFO_WORKERS = 40   # ponytail: measured against real Yahoo Finance (100 symbols:
-# 20 workers = 11.5s, 40 = 3.7s, 60 = 3.7s -- no further gain past 40, and
-# 100/100 resolved at every level tested, no throttling observed. Retune
-# down if that ever changes.
+INFO_WORKERS = 20   # Was briefly raised to 40 on a 100-symbol benchmark that
+# showed 3x speedup and zero failures -- but at the real 762-symbol scale
+# Yahoo throttles, and _info() swallows that silently: names came back with
+# no marketCap/PE at all, which surfaces much later as "Unclassified" size
+# buckets and blank value z-scores for stocks whose data is perfectly
+# available. Correctness over ~30s on a background job.
+INFO_RETRY_WORKERS = 5    # a throttled retry has to be gentler than the
+INFO_RETRY_PAUSE = 3.0    # pass that got throttled, or it just fails again
 
 
 def fetch(symbols, timeout=None, skip_info=False, period="5y"):
@@ -370,6 +375,23 @@ def fetch(symbols, timeout=None, skip_info=False, period="5y"):
 
     with ThreadPoolExecutor(max_workers=INFO_WORKERS) as ex:
         info = dict(ex.map(_info, px))
+
+    # A throttled .info comes back as {} indistinguishable from "this stock
+    # genuinely has no fundamentals", and the cost lands far downstream: no
+    # marketCap means no size bucket ("Unclassified"), no P/E means no value
+    # z-score -- for names whose data Yahoo will hand over perfectly well on
+    # a second, gentler ask. Retry just the empties, slower and with fewer
+    # workers than the pass that got throttled.
+    missing = [s for s, v in info.items() if not v]
+    if missing:
+        print(f"  {len(missing)} symbols returned no fundamentals, retrying gently...")
+        time.sleep(INFO_RETRY_PAUSE)
+        with ThreadPoolExecutor(max_workers=INFO_RETRY_WORKERS) as ex:
+            recovered = {s: v for s, v in ex.map(_info, missing) if v}
+        info.update(recovered)
+        still = len(missing) - len(recovered)
+        print(f"  recovered {len(recovered)}/{len(missing)}"
+              + (f", {still} still empty (likely genuinely unlisted)" if still else ""))
     return px, vol, info, close
 
 

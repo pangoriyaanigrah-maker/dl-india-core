@@ -312,11 +312,23 @@ INFO_WORKERS = 20   # Was briefly raised to 40 on a 100-symbol benchmark that
 # no marketCap/PE at all, which surfaces much later as "Unclassified" size
 # buckets and blank value z-scores for stocks whose data is perfectly
 # available. Correctness over ~30s on a background job.
-INFO_RETRY_WORKERS = 5    # a throttled retry has to be gentler than the
-INFO_RETRY_PAUSE = 3.0    # pass that got throttled, or it just fails again
+
+# Yahoo rate-limits .info by VOLUME, and hard: a real run measured 333 of
+# 762 symbols returning nothing, with a gentle 3s retry recovering 0 of
+# them -- once the limiter trips it stays tripped, so there is no pause
+# short enough to be worth waiting and long enough to help. What actually
+# works is not asking for 762 in a burst. The book's own holdings are the
+# only names whose market cap and value score are displayed per-stock, so
+# they are fetched FIRST and slowly, before the universe is allowed to
+# spend the budget. Everything after is best-effort: a partially-covered
+# benchmark still produces sensible sector/size weights, a holding with no
+# market cap shows up as "Unclassified" on screen.
+INFO_PRIORITY_WORKERS = 4     # gentle enough to survive a cold limiter
+INFO_RETRY_WORKERS = 2
+INFO_RETRY_PAUSE = 20.0       # only ever paid for the handful of holdings
 
 
-def fetch(symbols, timeout=None, skip_info=False, period="5y"):
+def fetch(symbols, timeout=None, skip_info=False, period="5y", priority=()):
     """-> ({symbol: [close, ...]}, {symbol: [volume, ...]}, {symbol: info},
     close_dataframe).
     One bulk price call; the fundamentals endpoint is per-name and flaky, so
@@ -373,25 +385,38 @@ def fetch(symbols, timeout=None, skip_info=False, period="5y"):
         except Exception:                      # yfinance raises freely here
             return s, {}
 
-    with ThreadPoolExecutor(max_workers=INFO_WORKERS) as ex:
-        info = dict(ex.map(_info, px))
+    # The book's own holdings go first, on a small pool, while Yahoo's
+    # rate limiter is still cold -- these are the only names whose market
+    # cap and value z-score are shown per-stock, so they must not be
+    # competing with 750 benchmark constituents for the same budget.
+    info = {}
+    prio = [s for s in priority if s in px]
+    if prio:
+        with ThreadPoolExecutor(max_workers=INFO_PRIORITY_WORKERS) as ex:
+            info.update(dict(ex.map(_info, prio)))
+        # A holding that still came back empty is worth a real wait; there
+        # are only a handful, and "Unclassified" on screen is the cost of
+        # giving up here.
+        empty = [s for s in prio if not info.get(s)]
+        if empty:
+            print(f"  {len(empty)}/{len(prio)} holdings returned no fundamentals, waiting {INFO_RETRY_PAUSE:.0f}s...")
+            time.sleep(INFO_RETRY_PAUSE)
+            with ThreadPoolExecutor(max_workers=INFO_RETRY_WORKERS) as ex:
+                info.update({s: v for s, v in ex.map(_info, empty) if v})
+            still = [s for s in empty if not info.get(s)]
+            print(f"  recovered {len(empty)-len(still)}/{len(empty)} holdings"
+                  + (f"; still empty: {', '.join(still)}" if still else ""))
 
-    # A throttled .info comes back as {} indistinguishable from "this stock
-    # genuinely has no fundamentals", and the cost lands far downstream: no
-    # marketCap means no size bucket ("Unclassified"), no P/E means no value
-    # z-score -- for names whose data Yahoo will hand over perfectly well on
-    # a second, gentler ask. Retry just the empties, slower and with fewer
-    # workers than the pass that got throttled.
-    missing = [s for s, v in info.items() if not v]
-    if missing:
-        print(f"  {len(missing)} symbols returned no fundamentals, retrying gently...")
-        time.sleep(INFO_RETRY_PAUSE)
-        with ThreadPoolExecutor(max_workers=INFO_RETRY_WORKERS) as ex:
-            recovered = {s: v for s, v in ex.map(_info, missing) if v}
-        info.update(recovered)
-        still = len(missing) - len(recovered)
-        print(f"  recovered {len(recovered)}/{len(missing)}"
-              + (f", {still} still empty (likely genuinely unlisted)" if still else ""))
+    rest = [s for s in px if s not in info]
+    with ThreadPoolExecutor(max_workers=INFO_WORKERS) as ex:
+        info.update(dict(ex.map(_info, rest)))
+    blank = sum(1 for s in rest if not info.get(s))
+    if blank:
+        # Best-effort by design: the benchmark is a market-cap-weighted
+        # aggregate, so partial coverage still gives sensible sector/size
+        # weights. Say how partial, rather than let it look complete.
+        print(f"  benchmark fundamentals: {len(rest)-blank}/{len(rest)} resolved "
+              f"({blank} rate-limited by Yahoo, weights computed from the rest)")
     return px, vol, info, close
 
 
@@ -470,10 +495,11 @@ def build():
               for h in holdings}
 
     universe = [f"{t}.NS" for t in constituents()]
-    symbols = sorted(set(universe) | {c for cs in wanted.values() for c in cs})
+    book_symbols = {c for cs in wanted.values() for c in cs}
+    symbols = sorted(set(universe) | book_symbols)
     print(f"fetching {len(symbols)} symbols ({len(wanted)} holdings + "
           f"{len(universe)} {INDEX_NAME})...")
-    px, vol, info, close_df = fetch(symbols)
+    px, vol, info, close_df = fetch(symbols, priority=sorted(book_symbols))
 
     # Resolve each holding to the first candidate that actually returned data.
     resolved, errors = {}, []

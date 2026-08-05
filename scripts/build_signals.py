@@ -502,7 +502,7 @@ def quick_prices(holdings):
     return out, errors
 
 
-def build():
+def build(previous=None):
     holdings = load_book()
     # Yahoo symbols to try per holding. Most NSE names are TK.NS; SME and
     # recently listed names are often only on BSE, hence the .BO fallback.
@@ -569,19 +569,39 @@ def build():
         }
 
     # Benchmark: market-cap weighted over the universe names that priced.
-    bench_sect, bench_size = defaultdict(float), defaultdict(float)
+    #
+    # Yahoo rate-limits hard enough that a single run typically resolves
+    # only about half the 740 constituents -- but it throttles a DIFFERENT
+    # random half each time, and a constituent's market cap and sector
+    # barely move day to day. So the last known value is carried forward
+    # for anything missing today: coverage converges to ~full over a few
+    # runs, and the benchmark stops jumping around because a different
+    # slice got blocked. Fresh always wins over cached; cache only fills
+    # holes.
+    cached = (previous or {}).get("bench_cache") or {}
+    bench_cache, from_cache = {}, 0
     for s in universe:
         m = mcap.get(s, 0)
+        sector = (info.get(s) or {}).get("sector")
+        was_mcap, was_sector = cached.get(s) or (0, None)
         if not m:
-            continue
-        sector = info[s].get("sector")
-        if not sector:
+            if not was_mcap:
+                continue                       # never resolved, nothing to carry
+            m = was_mcap
+            from_cache += 1
+        elif not sector:
             sector = screener_sector(s.split(".")[0])
             if sector:
                 print(f"  {s}: no sector from Yahoo, found on Screener -> {sector}")
+        bench_cache[s] = [round(m), sector or was_sector]
+
+    bench_sect, bench_size = defaultdict(float), defaultdict(float)
+    for s, (m, sector) in bench_cache.items():
         bench_sect[sector or "Unclassified"] += m
         bench_size["Large" if m >= CUTS["large"] else
                    "Mid" if m >= CUTS["mid"] else "Small"] += m
+    print(f"  benchmark coverage: {len(bench_cache)}/{len(universe)} constituents"
+          + (f" ({from_cache} carried over from the previous run)" if from_cache else ""))
     tot = sum(bench_sect.values())
     share = lambda d: {k: round(v / tot, 4) for k, v in
                        sorted(d.items(), key=lambda kv: -kv[1])} if tot else {}
@@ -600,6 +620,9 @@ def build():
         "bench_sect": share(bench_sect),
         "bench_size": share(bench_size),
         "bench_index_level": bench_index_level(bench_returns),
+        # Last-known mcap/sector per constituent, so the next run can fill
+        # whatever Yahoo rate-limits away. Not read by the dashboard.
+        "bench_cache": bench_cache,
     }
 
 

@@ -47,7 +47,9 @@ def run(fetch: bool = True) -> int:
         if fetch:
             import build_signals
             log.info("fetching market data…")
-            fresh = build_signals.build()
+            # Pass the stored feed in so build() can carry forward the
+            # benchmark constituents Yahoo rate-limits away this run.
+            fresh = build_signals.build(previous=feed)
             if not (fresh.get("signals") or {}):
                 raise RuntimeError("price fetch returned no signals — refusing to write an empty feed")
             # Only now is anything written. Up to this point a failure has

@@ -25,6 +25,7 @@ import csv
 import io
 import json
 import math
+import random
 import re
 import sys
 import time
@@ -408,6 +409,15 @@ def fetch(symbols, timeout=None, skip_info=False, period="5y", priority=()):
                   + (f"; still empty: {', '.join(still)}" if still else ""))
 
     rest = [s for s in px if s not in info]
+    # SHUFFLED, deliberately. Yahoo throttles this hard from a datacenter
+    # IP (measured: 752/752 resolve in 38s from a residential connection,
+    # roughly half that from a GitHub Actions runner) and it trips at
+    # about the same point every run -- so a fixed order meant the same
+    # tail failed every single time, and build()'s carry-forward cache had
+    # nothing new to accumulate: coverage sat at 401 then 402 across two
+    # runs. Randomising which names lose the race lets the union grow run
+    # over run instead.
+    random.shuffle(rest)
     with ThreadPoolExecutor(max_workers=INFO_WORKERS) as ex:
         info.update(dict(ex.map(_info, rest)))
     blank = sum(1 for s in rest if not info.get(s))
@@ -416,7 +426,7 @@ def fetch(symbols, timeout=None, skip_info=False, period="5y", priority=()):
         # aggregate, so partial coverage still gives sensible sector/size
         # weights. Say how partial, rather than let it look complete.
         print(f"  benchmark fundamentals: {len(rest)-blank}/{len(rest)} resolved "
-              f"({blank} rate-limited by Yahoo, weights computed from the rest)")
+              f"({blank} rate-limited by Yahoo, filled from cache where possible)")
     return px, vol, info, close
 
 

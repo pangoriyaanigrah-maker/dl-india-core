@@ -455,6 +455,25 @@ def market_cap(info_d, last_price=None):
     return shares * last_price if (shares and last_price) else None
 
 
+def backfill_mcap(mcap, scored, cached):
+    """Fill in symbols Yahoo dropped this run from last run's bench_cache,
+    in place. Returns the set of symbols that got a cached value, so callers
+    can skip re-deriving anything else (eg. sector) for them.
+
+    A market cap barely moves day to day, and this has to run before mcap
+    feeds bench_returns/signals -- otherwise a HOLDING's own mcap (not just
+    the benchmark rollup) blanks out on the dashboard every time Yahoo
+    throttles it for one run, even a priority-fetched one."""
+    backfilled = set()
+    for s in scored:
+        if not mcap.get(s):
+            was_mcap = (cached.get(s) or (0, None))[0]
+            if was_mcap:
+                mcap[s] = was_mcap
+                backfilled.add(s)
+    return backfilled
+
+
 def positive_num(d, *keys):
     """Like num(), but for a ratio that is only meaningful when positive --
     P/E, P/B, EV/EBITDA. A loss-making company prices to a negative P/E,
@@ -542,6 +561,9 @@ def build(previous=None):
     scored = sorted(set(px) & (set(universe) | set(resolved.values())))
     mcap = {s: (market_cap(info[s], px[s][-1]) or 0) / 1e7 for s in scored}   # -> Rs crore
 
+    cached = (previous or {}).get("bench_cache") or {}
+    bench_cache_backfilled = backfill_mcap(mcap, scored, cached)
+
     momo = zscores({s: momentum(px[s]) for s in scored}, clip=False)
     val = blend(*[{k: (-v if v is not None else None)
                    for k, v in zscores({s: positive_num(info[s], *ks) for s in scored}).items()}
@@ -583,27 +605,22 @@ def build(previous=None):
     # Yahoo rate-limits hard enough that a single run typically resolves
     # only about half the 740 constituents -- but it throttles a DIFFERENT
     # random half each time, and a constituent's market cap and sector
-    # barely move day to day. So the last known value is carried forward
-    # for anything missing today: coverage converges to ~full over a few
-    # runs, and the benchmark stops jumping around because a different
-    # slice got blocked. Fresh always wins over cached; cache only fills
-    # holes.
-    cached = (previous or {}).get("bench_cache") or {}
+    # barely move day to day. mcap itself was already backfilled from cache
+    # above; this just does the same for sector, and skips both counting
+    # and the never-resolved-at-all symbols.
     bench_cache, from_cache = {}, 0
     for s in universe:
         m = mcap.get(s, 0)
-        sector = (info.get(s) or {}).get("sector")
-        was_mcap, was_sector = cached.get(s) or (0, None)
         if not m:
-            if not was_mcap:
-                continue                       # never resolved, nothing to carry
-            m = was_mcap
+            continue                           # never resolved, nothing to carry
+        if s in bench_cache_backfilled:
             from_cache += 1
-        elif not sector:
+        sector = (info.get(s) or {}).get("sector") or (cached.get(s) or (0, None))[1]
+        if not sector and s not in bench_cache_backfilled:
             sector = screener_sector(s.split(".")[0])
             if sector:
                 print(f"  {s}: no sector from Yahoo, found on Screener -> {sector}")
-        bench_cache[s] = [round(m), sector or was_sector]
+        bench_cache[s] = [round(m), sector]
 
     bench_sect, bench_size = defaultdict(float), defaultdict(float)
     for s, (m, sector) in bench_cache.items():
@@ -704,6 +721,17 @@ def selftest():
     assert market_cap({"sharesOutstanding": 3618087518}, 2413.0) == 3618087518 * 2413.0
     assert market_cap({"trailingPE": 16.7}, 2413.0) is None, "no shares, no derivation"
     assert market_cap({"sharesOutstanding": 3618087518}, None) is None, "no price, no derivation"
+
+    # A holding's own mcap (TCS, RELIANCE ...) must not blank out on the
+    # dashboard just because Yahoo dropped it for one run -- last known
+    # value carries forward, same as the benchmark rollup already did.
+    mcap = {"TCS.NS": 0, "RELIANCE.NS": 1_800_000, "NEWCO.NS": 0}
+    cached = {"TCS.NS": [1_500_000, "IT"], "OLDCO.NS": [500_000, "Energy"]}
+    backfilled = backfill_mcap(mcap, list(mcap), cached)
+    assert mcap["TCS.NS"] == 1_500_000, "cached value must fill a fresh miss"
+    assert mcap["RELIANCE.NS"] == 1_800_000, "fresh value must win over cache"
+    assert mcap["NEWCO.NS"] == 0, "no cache entry means it stays unresolved, not invented"
+    assert backfilled == {"TCS.NS"}, "only the symbol actually filled from cache is reported"
 
     assert adv([]) is None, "no data must not fake a zero"
     assert adv([100.0] * 5) is None, "below minimum sample must be None"

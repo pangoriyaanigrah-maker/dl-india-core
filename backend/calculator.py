@@ -467,20 +467,34 @@ FACTORS = [
 
 def rail(h, s):
     """Positions-tab price rail. None when the dashboard would show text
-    instead: no feed, or no target price."""
+    instead: no feed, or no target price.
+
+    Scale bounds and displayed points are kept separate. The scale
+    (loAnchor/hiAnchor below) still dips below the real 52-week low to
+    make room for the Add tick, and now also stretches above target/CMP
+    to the real 52-week high when that's the biggest of the three -- but
+    every DISPLAYED point (lo/hi/tp/cmp/add) is placed at its own real
+    price, never silently substituted by a scale-adjustment artifact."""
     if not s:
         return None
-    c, tp, add, lo = s.get("cmp"), h.get("tp"), h.get("addLvl"), s.get("lo")
+    c, tp, add = s.get("cmp"), h.get("tp"), h.get("addLvl")
+    lo, lo_estimated = s.get("lo"), False
     if lo is None and c and tp is not None:
         lo = min(c, tp) * 0.88
+        lo_estimated = True
     if not (c and lo is not None and tp is not None):
         return None
-    hi_a = max(tp, c)
+    hi = s.get("hi")
+    hi_a = max(tp, c, hi) if hi is not None else max(tp, c)
     lo_a = min(lo, add * 0.98) if add else lo
     span = hi_a * 1.03 - lo_a
     x = lambda v: round(min(99.0, max(0.0, (v - lo_a) / span * 100)), 1)  # noqa: E731
-    return {"loAnchor": lo_a, "hiAnchor": hi_a, "span": span,
-            "cmpPct": x(c), "tpPct": x(tp), "addPct": x(add) if add else None}
+    return {
+        "lo": round(lo, 2), "loEstimated": lo_estimated, "loPct": x(lo),
+        "hi": round(hi, 2) if hi is not None else None,
+        "hiPct": x(hi) if hi is not None else None,
+        "tpPct": x(tp), "cmpPct": x(c), "addPct": x(add) if add else None,
+    }
 
 
 def _bench(feed):

@@ -505,6 +505,63 @@ def test_give1m_survives_a_stock_that_went_to_zero():
     assert g({"r1m": 0.05}) == pytest.approx(1 / 1.05 - 1)
 
 
+def test_rail_shows_the_real_52w_range_not_a_silently_shifted_anchor():
+    """The rail's underlying SCALE can still dip below the real 52-week low
+    to make room for the Add tick -- but the LABELED low must always be the
+    real price, never the scale-adjusted anchor standing in for it. This
+    was the actual bug: today's loAnchor IS both the scale bound and the
+    displayed label, so when Add pulls the scale down, the label silently
+    shows that lower number instead of the real 52-week low."""
+    h = {"tp": 4200.0, "addLvl": 3600.0}
+    s = {"cmp": 2452.70, "lo": 1971.79, "hi": 3204.28}
+    r = calculator.rail(h, s)
+    assert r["lo"] == 1971.79
+    assert r["loEstimated"] is False
+    assert r["hi"] == 3204.28
+
+    # Now push the Add level BELOW the real 52-week low -- the scale still
+    # needs to dip to make room for the Add tick, but the label must keep
+    # showing the real low, not the anchor.
+    h2 = {"tp": 4200.0, "addLvl": 1500.0}
+    r2 = calculator.rail(h2, s)
+    assert r2["lo"] == 1971.79, \
+        "the label must show the real 52-week low, not the anchor pulled below it for the Add tick"
+    assert r2["loPct"] > 0, \
+        "the real low now sits inside the scale (not pinned to the left edge), because the scale itself was pulled lower"
+
+
+def test_rail_extends_the_scale_to_the_52w_high_when_its_the_highest_point():
+    """Today's hiAnchor is max(TP, CMP) -- the 52-week high isn't part of
+    the scale at all, so a stock trading above its old target would show
+    the high clamped to the right edge as if it were near TP, when it's
+    actually much higher. hiAnchor must now be max(52W high, TP, CMP)."""
+    h = {"tp": 2000.0, "addLvl": None}
+    s = {"cmp": 2200.0, "lo": 1800.0, "hi": 3000.0}
+    r = calculator.rail(h, s)
+    # 52W high (3000) is bigger than both TP (2000) and CMP (2200), so it
+    # must stretch the scale rather than sit off past a scale capped at
+    # 2200 -- which would show it clamped at 99%, indistinguishable from a
+    # stock barely above its target.
+    assert r["hiPct"] > 90, \
+        "the 52-week high must genuinely stretch the scale, not just get clamped near the edge"
+
+
+def test_rail_marks_a_missing_52w_low_as_estimated():
+    h = {"tp": 4200.0, "addLvl": None}
+    s = {"cmp": 2452.70, "hi": 3204.28}   # no "lo" in the feed
+    r = calculator.rail(h, s)
+    assert r["loEstimated"] is True
+    assert r["lo"] == pytest.approx(min(2452.70, 4200.0) * 0.88, abs=0.01)
+
+
+def test_rail_handles_a_missing_52w_high():
+    h = {"tp": 4200.0, "addLvl": None}
+    s = {"cmp": 2452.70, "lo": 1971.79}   # no "hi" in the feed
+    r = calculator.rail(h, s)
+    assert r["hi"] is None
+    assert r["hiPct"] is None
+
+
 def test_xirr_matches_hand_calculation():
     """Rs 1,00,000 invested, Rs 1,10,000 back exactly one year later ->
     XIRR must be exactly 10%, no numerical wobble. Two years compounding

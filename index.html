@@ -822,6 +822,31 @@ function renderPositions(){
       <div class="detail">
         <span class="dlab">Thesis — ${esc(h.analyst||"")}</span>${esc(h.thesis||"No thesis entered.")}
         <div class="strat"><span class="dlab">Strategy</span>${esc(h.strategy||"No strategy entered.")}</div>
+        ${(()=>{
+          // Reuses the trade rows already fetched for the Performance tab
+          // rather than a new endpoint -- same data, just filtered to this
+          // ticker. Capped the same way the Performance trade log is, so
+          // one heavily-traded name can't blow up an expanded row.
+          const tkTrades = (store.data.performance?.trades || []).filter(t => t.tk === h.tk);
+          if (!tkTrades.length) return "";
+          const SHOWN = 10;
+          const recent = tkTrades.slice(0, SHOWN);
+          const hidden = tkTrades.length - recent.length;
+          return `<div class="strat">
+            <span class="dlab">Trades — ${tkTrades.length} total</span>
+            <div class="twrap" style="margin-top:6px"><table class="ptable" style="min-width:420px">
+              <thead><tr><th>Date</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th><th>Costs</th></tr></thead>
+              <tbody>
+              ${recent.map(t=>
+                `<tr><td>${fmt.d(t.date)}</td>
+                  <td class="${t.side==="Buy"?"pos":"neg"}">${esc(t.side)}</td>
+                  <td>${t.qty.toLocaleString("en-IN")}</td><td>${fmt.inr(t.price)}</td>
+                  <td>${fmt.inr(t.value)}</td><td>${fmt.inr(t.costs)}</td></tr>`).join("")}
+              </tbody>
+            </table></div>
+            ${hidden > 0 ? `<div class="foot" style="margin-top:4px">${hidden} older trade${hidden===1?"":"s"} not shown — full ledger on the Performance tab or the Trades sheet.</div>` : ""}
+          </div>`;
+        })()}
       </div>
     </div>`;
   }).join("");

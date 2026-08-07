@@ -110,23 +110,20 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
   border:1px solid var(--line);border-radius:3px;padding:1px 5px;margin-left:6px}
 .built{font-family:'IBM Plex Mono';font-size:10px;color:var(--saffron);
   border:1px solid rgba(242,169,59,.4);border-radius:3px;padding:1px 5px;margin-left:6px}
-.rail{position:relative;height:26px}
-.rail .track{position:absolute;top:12px;left:0;right:0;height:2px;background:var(--line)}
-.rail .tp{position:absolute;top:6px;width:2px;height:14px;background:var(--saffron)}
-.rail .add{position:absolute;top:8px;width:2px;height:10px;background:var(--blue)}
-.rail .cmp{position:absolute;top:8.5px;width:9px;height:9px;border-radius:50%;
-  background:var(--ink);border:2px solid var(--up);transform:translateX(-50%)}
-/* nowrap: "TP 2,188" wrapping to a second line is what dropped the label onto
-   the track. The rail is only 26px tall, so a two-line label always collides. */
-.rail{padding-top:4px;padding-bottom:13px}
-.rail .lo,.rail .tg{position:absolute;top:-7px;font-family:'IBM Plex Mono';font-size:9.5px;
-  color:var(--faint);white-space:nowrap;line-height:1}
+.rail{display:flex;flex-direction:column;gap:1px}
+.rail .band{position:relative;height:13px}
+.rail .band span{position:absolute;top:0;font-family:'IBM Plex Mono';font-size:9.5px;
+  white-space:nowrap;line-height:13px}
+.rail .lo,.rail .hi{color:var(--faint)}
 .rail .tg{color:var(--saffron)}
-/* Add-level price sits below the track, opposite lo/tg above it, so the two
-   rows of labels can never collide vertically regardless of where each price
-   falls on the axis. */
-.rail .addlbl{position:absolute;bottom:-7px;font-family:'IBM Plex Mono';font-size:9.5px;
-  color:var(--blue);white-space:nowrap;line-height:1}
+.rail .addlbl{color:var(--blue)}
+.rail .track{position:relative;height:2px;background:var(--line);margin:5px 0}
+.rail .track .tick{position:absolute;top:-6px;width:2px;height:14px}
+.rail .track .lotick,.rail .track .hitick{background:var(--faint)}
+.rail .track .tp{background:var(--saffron)}
+.rail .track .add{background:var(--blue)}
+.rail .track .cmp{position:absolute;top:-3.5px;width:9px;height:9px;border-radius:50%;
+  background:var(--ink);border:2px solid var(--up);transform:translateX(-50%)}
 .detail{display:none;font-size:14px;color:var(--dim);line-height:1.55;
   border-top:1px dashed var(--line);margin:0 16px;padding:11px 0 14px}
 .detail b{color:var(--text);font-weight:600}
@@ -773,16 +770,27 @@ function renderPositions(){
     let railHtml = `<div class="cell" style="color:var(--faint)">no price feed</div>`;
     if (h.rail){
       const r = h.rail;
-      const addLbl = r.addPct==null ? "" :
-        `<span class="addlbl" style="left:${r.addPct}%;transform:translateX(${r.addPct > 65 ? "-100%" : "0"})">Add ${Math.round(h.addLvl).toLocaleString("en-IN")}</span>`;
+      // Shared edge-clamp rule for every rail label: hug the left edge
+      // near 0%, hug the right edge near 100%, centered in between -- so
+      // no label can ever run off the rail regardless of which of the
+      // five prices it's attached to.
+      const lab = (pct, cls, text, style) => pct==null ? "" :
+        `<span class="${cls}" style="left:${pct}%;transform:translateX(${pct<15?"0":pct>85?"-100%":"-50%"})${style?";"+style:""}">${esc(text)}</span>`;
+      const loTxt = "52W LOW " + fmt.inr(r.lo) + (r.loEstimated ? " (est.)" : "");
       railHtml = `<div class="rail">
-        ${r.tpPct > 34 ? `<span class="lo" style="left:0">${Math.round(r.loAnchor).toLocaleString("en-IN")}</span>` : ""}
-        <span class="tg" style="left:${r.tpPct}%;transform:translateX(${r.tpPct > 34 ? "-100%" : "0"})">TP ${Math.round(h.tp).toLocaleString("en-IN")}</span>
-        <div class="track"></div>
-        ${r.addPct!=null?`<div class="add" style="left:${r.addPct}%" title="Add ₹${h.addLvl}"></div>`:""}
-        ${addLbl}
-        <div class="tp" style="left:${r.tpPct}%"></div>
-        <div class="cmp" style="left:${r.cmpPct}%;border-color:${h.status.colour}"></div></div>`;
+        <div class="band">${lab(r.loPct, "lo", loTxt)}</div>
+        ${r.hiPct!=null ? `<div class="band">${lab(r.hiPct, "hi", "52W HIGH " + fmt.inr(r.hi))}</div>` : ""}
+        <div class="band">${lab(r.tpPct, "tg", "TP " + fmt.inr(h.tp))}</div>
+        <div class="track">
+          <div class="tick lotick" style="left:${r.loPct}%"></div>
+          ${r.hiPct!=null ? `<div class="tick hitick" style="left:${r.hiPct}%"></div>` : ""}
+          ${r.addPct!=null ? `<div class="tick add" style="left:${r.addPct}%" title="Add level"></div>` : ""}
+          <div class="tick tp" style="left:${r.tpPct}%"></div>
+          <div class="cmp" style="left:${r.cmpPct}%;border-color:${h.status.colour}"></div>
+        </div>
+        <div class="band">${lab(r.cmpPct, "cmplbl", "CMP " + fmt.inr(h.cmp), "color:"+h.status.colour)}</div>
+        ${r.addPct!=null ? `<div class="band">${lab(r.addPct, "addlbl", "ADD LEVEL " + fmt.inr(h.addLvl))}</div>` : ""}
+      </div>`;
     } else if (h.cmp && h.tp==null){
       railHtml = `<div class="cell" style="color:var(--faint)">CMP ${fmt.inr(h.cmp)} · no target set</div>`;
     }

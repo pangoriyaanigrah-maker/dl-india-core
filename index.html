@@ -380,7 +380,7 @@ const fmt = {
   pct:(x,s=1)=> x==null ? "—" : (x>0&&s?"+":"") + (x*100).toFixed(1) + "%",
   w:(x)=> x==null ? "—" : (x*100).toFixed(1)+"%",
   z:(v)=> v==null ? "—" : (v>0?"+":"") + v.toFixed(2) + "σ",
-  inr:(v)=> v==null ? "—" : (v<0?"−₹":"₹") + Math.round(Math.abs(v)).toLocaleString("en-IN"),
+  inr:(v)=> v==null ? "—" : (v<0?"−₹":"₹") + Math.abs(v).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2}),
   d:(s)=> { if(!s) return "—"; const dt=new Date(s);
     return isNaN(dt) ? "—" : dt.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"}); }
 };

@@ -87,14 +87,19 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
 .ptable tr:last-child td{border-bottom:none}
 .actbar{display:inline-block;height:8px;border-radius:2px;vertical-align:middle}
 /* ---------- positions ---------- */
-.cols{display:grid;grid-template-columns:2fr 1fr 1.6fr 1fr 1fr 1fr;gap:12px;
+.cols{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:12px;
   padding:10px 16px 6px;font-family:'Barlow Condensed';font-weight:600;font-size:12px;
   letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
 .row{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:8px;
   cursor:pointer;transition:border-color .15s}
 .row:hover{border-color:var(--saffron)}
-.row-main{display:grid;grid-template-columns:2fr 1fr 1.6fr 1fr 1fr 1fr;gap:12px;
+.row-main{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:12px;
   padding:13px 16px;align-items:center}
+/* The rail gets its own full-width row below row-main instead of sharing
+   a cramped ~200px grid column with five other cells -- that shared
+   column was the actual source of the crowding, no amount of spacing
+   inside the rail could fix a container that's fundamentally too narrow. */
+.railrow{padding:0 16px 13px}
 .nm2 .tk{font-family:'IBM Plex Mono';font-weight:600;font-size:14px}
 .nm2 .co{font-size:12.5px;color:var(--dim);margin-top:1px}
 .nm2 .meta{font-family:'IBM Plex Mono';font-size:10.5px;color:var(--faint);margin-top:3px}
@@ -185,7 +190,6 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
   .cols{display:none}
   .row-main{grid-template-columns:1fr 1fr;gap:10px 14px}
   .nm2{grid-column:1 / -1}
-  .rail{grid-column:1 / -1;margin-top:2px}
   .cell .lbl{display:block;font-family:'Barlow Condensed';font-weight:600;font-size:11px;
     letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:2px}
   .plbar{grid-template-columns:76px 1fr 76px}
@@ -217,7 +221,7 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
 <div class="view" id="v-perf"><div id="perf-body"></div></div>
 <div class="view" id="v-posn">
   <div class="cols">
-    <div>Name</div><div>Weight</div><div>CMP → Target</div><div>Upside</div><div>Signals</div><div>Status</div>
+    <div>Name</div><div>Weight</div><div>Upside</div><div>Signals</div><div>Status</div>
   </div>
   <div id="rows"></div>
   <div class="foot">Tap a position for thesis and strategy. Blue tick on the rail = staged add level. Signal z-scores are cross-sectional vs the index constituents named on the Exposures tab, fetched from NSE nightly.</div>
@@ -809,12 +813,12 @@ function renderPositions(){
           <div class="co">${esc(h.co)}</div>
           <div class="meta">${esc(h.industry||h.sector||"—")} · ${esc(h.analyst||"—")} · Conviction ${esc(h.conviction||"—")}</div></div>
         <div class="cell"><div class="lbl">Weight</div>${(h.wt*100).toFixed(1)}%<div class="sub">full ${h.fullWt!=null?fmt.w(h.fullWt):"—"}</div></div>
-        ${railHtml}
         <div class="cell ${h.upside!=null&&h.upside>=0?"pos":"neg"}"><div class="lbl">Upside</div>${h.upside!=null?fmt.pct(h.upside):"—"}<div class="sub">${h.cmp?"CMP "+fmt.inr(h.cmp):""}</div></div>
         <div class="cell"><div class="lbl">Signals</div><div class="sigchips">
           <span>V ${zc(s.val)}</span><span>M ${zc(s.momo)}</span><span>Q ${zc(s.qual)}</span></div></div>
         <div class="cell"><div class="lbl">Status</div><span class="badge ${h.status.class}">${esc(h.status.text)}</span></div>
       </div>
+      <div class="railrow">${railHtml}</div>
       <div class="detail">
         <span class="dlab">Thesis — ${esc(h.analyst||"")}</span>${esc(h.thesis||"No thesis entered.")}
         <div class="strat"><span class="dlab">Strategy</span>${esc(h.strategy||"No strategy entered.")}</div>

@@ -796,7 +796,7 @@ function renderPositions(){
           <div class="cmp" style="left:${r.cmpPct}%;border-color:${h.status.colour}"></div>
         </div>
         <div class="band">${lab(r.cmpPct, "cmplbl", "CMP " + fmt.inr(h.cmp), "color:"+h.status.colour)}</div>
-        ${r.addPct!=null ? `<div class="band">${lab(r.addPct, "addlbl", "ADD LEVEL " + fmt.inr(h.addLvl))}</div>` : ""}
+        ${r.addPct!=null ? `<div class="band">${lab(r.addPct, "addlbl", "ADD " + fmt.inr(h.addLvl))}</div>` : ""}
       </div>`;
     } else if (h.cmp && h.tp==null){
       railHtml = `<div class="cell" style="color:var(--faint)">CMP ${fmt.inr(h.cmp)} · no target set</div>`;

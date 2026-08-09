@@ -27,6 +27,7 @@ import json
 import math
 import random
 import re
+import statistics
 import sys
 import time
 import urllib.request
@@ -111,19 +112,6 @@ def blend(*maps):
 
 YEAR = 252                                 # trading days
 MONTH = 21
-
-
-def momentum(closes):
-    """12M-1M return plus 6M return — the blend the dashboard's factor rail
-    describes. Needs a full year of history, so recent IPOs score None rather
-    than being compared on a stub.
-
-    Anchored at closes[-YEAR], not closes[0]: the series is 5 years long now
-    (the risk metrics need it) and closes[0] would silently become a 5-year
-    momentum score."""
-    if len(closes) < YEAR + MONTH:
-        return None
-    return (closes[-MONTH] / closes[-YEAR] - 1) + (closes[-1] / closes[-126] - 1)
 
 
 def risk(closes):
@@ -487,6 +475,175 @@ def positive_num(d, *keys):
     return v if (v is not None and v > 0) else None
 
 
+def percentile_rank(raw, floor=5):
+    """{key: value|None} -> {key: percentile 0-100|None}. A cross-sectional
+    rank, not a z-score -- used where a %-scale number (an EPS revision)
+    needs blending with a z-score (an outlier score) that isn't on the same
+    footing otherwise. Same floor as zscores(): fewer than `floor` real
+    observations means there is no real cross-section, so everything is
+    None rather than a fake midpoint."""
+    keys = [k for k, v in raw.items() if v is not None and math.isfinite(v)]
+    out = {k: None for k in raw}
+    if len(keys) < floor:
+        return out
+    ordered = sorted(keys, key=lambda k: raw[k])
+    n = len(ordered)
+    for i, k in enumerate(ordered):
+        out[k] = round(i / (n - 1) * 100, 1) if n > 1 else 50.0
+    return out
+
+
+def is_bank(info_d):
+    """A handful of factor inputs (EBIT/EV, Net Debt/EBITDA) don't mean
+    anything for a lender -- a bank's 'debt' is its business, not leverage
+    in the industrial sense. Detected from Yahoo's own industry/sector
+    text rather than a maintained ticker list, so it covers new listings
+    for free."""
+    text = f"{info_d.get('industry') or ''} {info_d.get('sector') or ''}".lower()
+    return "bank" in text
+
+
+def ebit_ev(info_d):
+    """Operating yield: how much operating profit you get per rupee of
+    enterprise value. EBIT itself isn't a field Yahoo serves directly, so
+    it's approximated as operating margin x revenue -- both are. For a
+    bank this ratio doesn't mean anything (a bank's core business shows up
+    as interest margin, not an EV multiple), so it falls back to 1/PE,
+    the closest available operating-yield analogue."""
+    if is_bank(info_d):
+        pe = positive_num(info_d, "trailingPE")
+        return (1 / pe) if pe else None
+    om = num(info_d, "operatingMargins")
+    rev = num(info_d, "totalRevenue")
+    ev = num(info_d, "enterpriseValue")
+    if om is None or rev is None or not ev:
+        return None
+    return (om * rev) / ev
+
+
+def y_g_t_premium(info_d, t_rate=0.04):
+    """Buffett's owner-earnings framing: free-cash-flow yield plus the
+    growth you're not paying for, minus a risk-free rate to price against.
+    T_RATE is a fixed 4% assumption, not fetched -- there's no per-stock
+    risk-free rate, only a market-wide one, so it's a constant like the
+    zscores() +/-3 clamp is. FCF yield and sustainable growth are each
+    only meaningful together (a growth rate with no FCF context, or vice
+    versa, isn't the same claim) so this is None unless all four inputs
+    resolve -- never a partial sum standing in for the whole thing."""
+    fcf = num(info_d, "freeCashflow")
+    mcap = num(info_d, "marketCap")
+    roe = num(info_d, "returnOnEquity")
+    payout = num(info_d, "payoutRatio")
+    if fcf is None or not mcap or roe is None or payout is None:
+        return None
+    return (fcf / mcap) + (roe * (1 - payout)) - t_rate
+
+
+def tgt_price_ratio(info_d, cmp):
+    """Analyst-implied return: mean target price vs today's price. NSE
+    analyst-target coverage is known-sparse (fewer sell-side desks cover
+    small/micro-caps than in US markets), so this is expected to be None
+    for a large share of the universe -- zscores()'s floor=5 already
+    handles that by scoring nobody rather than a thin, misleading sample."""
+    tgt = num(info_d, "targetMeanPrice")
+    if tgt is None or not cmp:
+        return None
+    return tgt / cmp - 1
+
+
+def net_debt_ebitda(info_d):
+    """Leverage: (debt - cash) / EBITDA, lower is safer. For a bank this
+    is meaningless the same way EBIT/EV is -- deposits look like 'debt'
+    but are the business, not leverage risk -- so it falls back to
+    assets/equity (inverted so lower is still better), Yahoo's closest
+    analogue to a bank capital-adequacy ratio."""
+    if is_bank(info_d):
+        equity = num(info_d, "totalStockholderEquity") or num(info_d, "bookValue")
+        assets = num(info_d, "totalAssets")
+        if not equity or not assets:
+            return None
+        return assets / equity
+    debt = num(info_d, "totalDebt")
+    cash = num(info_d, "totalCash")
+    ebitda_v = num(info_d, "ebitda")
+    if debt is None or cash is None or not ebitda_v:
+        return None
+    return (debt - cash) / ebitda_v
+
+
+def cash_conversion(info_d):
+    """CFO / EBITDA -- how much of reported profit shows up as actual
+    cash. A company that's profitable on paper but not converting it to
+    cash (aggressive revenue recognition, growing receivables) shows up
+    here before it shows up in the P&L."""
+    cfo = num(info_d, "operatingCashflow")
+    ebitda_v = num(info_d, "ebitda")
+    if cfo is None or not ebitda_v:
+        return None
+    return cfo / ebitda_v
+
+
+def six_month_return(closes):
+    """Raw 6-month price return -- the magnitude half of the Momentum
+    factor, scored on its own rather than pre-blended into one number
+    the way the old momentum() combo score was, so a name that's merely
+    OK on magnitude but excellent on trend quality (six_month_sharpe)
+    still shows up correctly on the parts that are strong."""
+    if len(closes) < 127:
+        return None
+    return closes[-1] / closes[-126] - 1
+
+
+def six_month_sharpe(closes):
+    """Risk-adjusted trend quality: mean daily return / stdev of daily
+    return over the last ~6 months. Deliberately NOT annualized -- this
+    number only ever feeds a cross-sectional z-score, and annualizing is
+    a constant multiplier applied to every stock alike, which can't
+    change anyone's rank. Skipping it is one less place to get a
+    trading-days-per-year constant wrong for no effect on the output."""
+    if len(closes) < 127:
+        return None
+    window = closes[-126:]
+    rets = [window[i] / window[i - 1] - 1 for i in range(1, len(window))]
+    mean = sum(rets) / len(rets)
+    sd = (sum((r - mean) ** 2 for r in rets) / len(rets)) ** 0.5
+    return (mean / sd) if sd else None
+
+
+def sector_momentum_map(scored, six_m, sectors):
+    """Median 6-month return within each stock's own sector -- 'is the
+    sub-sector at large moving,' a tailwind/headwind check independent of
+    the stock's own return. Every stock in a sector gets that sector's
+    median as its raw input, then it's cross-sectionally z-scored like
+    any other factor input. A sector needs >=3 priced members for its
+    median to mean anything; below that, a 1-stock 'sector' would just be
+    that stock's own six_month_return relabeled, silently double-counting
+    the magnitude factor instead of adding new information."""
+    by_sector = defaultdict(list)
+    for s in scored:
+        sec, v = sectors.get(s), six_m.get(s)
+        if sec and v is not None:
+            by_sector[sec].append(v)
+    medians = {sec: statistics.median(vs) for sec, vs in by_sector.items() if len(vs) >= 3}
+    return {s: medians.get(sectors.get(s)) for s in scored}
+
+
+def stress_resilience_24m(closes, window=504):
+    """How far the current price sits below its own high of the last ~24
+    months (window=504 trading days). Closer to 0 = resilient: either it
+    never had a serious drawdown, or it did and has since recovered --
+    both read the same way here, which is the point (recovery IS what
+    resilience means, not merely 'avoided a crash'). Deeply negative =
+    still sitting in whatever hole it dug, unrecovered."""
+    recent = closes[-window:] if len(closes) >= window else closes
+    if len(recent) < 40:
+        return None
+    peak = recent[0]
+    for c in recent:
+        peak = max(peak, c)
+    return recent[-1] / peak - 1
+
+
 def quick_prices(holdings):
     """Fast, book-only price refresh: just cmp/lo/hi for the current
     holdings, no benchmark universe, no per-ticker .info call. Meant to
@@ -564,17 +721,44 @@ def build(previous=None):
     cached = (previous or {}).get("bench_cache") or {}
     bench_cache_backfilled = backfill_mcap(mcap, scored, cached)
 
-    momo = zscores({s: momentum(px[s]) for s in scored}, clip=False)
-    val = blend(*[{k: (-v if v is not None else None)
-                   for k, v in zscores({s: positive_num(info[s], *ks) for s in scored}).items()}
-                  for ks in (("forwardPE", "trailingPE"),
-                             ("priceToBook",),
-                             ("enterpriseToEbitda",))])
+    # Value/Quality/Momentum sub-components below all follow the same
+    # equal-weighted blend() pattern regardless of factor: z-score (or
+    # percentile-rank) each sub-component across the cross-section, then
+    # average whichever ones a stock actually has data for. Nothing here
+    # is winsorized-off/on inconsistently by accident -- it's the default
+    # (clip=True) everywhere except six-month figures (clip=False, same
+    # reasoning as the old momentum() score: clipping the tail flattens
+    # exactly the top-momentum names the factor exists to highlight).
+    sectors = {s: (info.get(s) or {}).get("sector") for s in scored}
+    six_m = {s: six_month_return(px[s]) for s in scored}
+    momo = blend(
+        zscores(six_m, clip=False),
+        zscores({s: six_month_sharpe(px[s]) for s in scored}, clip=False),
+        zscores(sector_momentum_map(scored, six_m, sectors), clip=False),
+    )
+    val = blend(
+        zscores({s: ebit_ev(info[s]) for s in scored}),
+        zscores({s: y_g_t_premium(info[s]) for s in scored}),
+        zscores({s: tgt_price_ratio(info[s], px[s][-1]) for s in scored}),
+    )
     qual = blend(
-        zscores({s: num(info[s], "returnOnEquity") for s in scored}),
+        zscores({s: num(info[s], "grossMargins") for s in scored}),
         {k: (-v if v is not None else None)
-         for k, v in zscores({s: num(info[s], "debtToEquity") for s in scored}).items()},
-        zscores({s: num(info[s], "profitMargins") for s in scored}),
+         for k, v in zscores({s: net_debt_ebitda(info[s]) for s in scored}).items()},
+        zscores({s: cash_conversion(info[s]) for s in scored}),
+        zscores({s: stress_resilience_24m(px[s]) for s in scored}),
+        # Op margin sustainability, Compounding Score, and Receivables
+        # trend all need multi-year/multi-quarter financial history this
+        # script doesn't fetch yet (blocked on an FMP integration, not
+        # built here) -- blend() already averages only what exists, so
+        # Quality quietly improves in place once those land, no reshape.
+    )
+    biz_momo = blend(
+        zscores({s: num(info[s], "revenueGrowth") for s in scored}),
+        zscores({s: num(info[s], "earningsGrowth") for s in scored}),
+        # Analyst signal, Forward visibility, and Sequential acceleration
+        # are the same story as Quality above -- FMP-blocked, not missing
+        # by oversight.
     )
 
     bench_returns = bench_return_series(close_df, universe, mcap)
@@ -592,6 +776,7 @@ def build(previous=None):
             "val": val.get(s),
             "momo": momo.get(s),
             "qual": qual.get(s),
+            "bizMomo": biz_momo.get(s),
             "r1m": r.get("r1m"),
             "worstM": r.get("worstM"),
             "mdd": r.get("mdd"),
@@ -639,9 +824,14 @@ def build(previous=None):
         "note": f"z-scores are cross-sectional vs the official {INDEX_NAME} constituents "
                 "(NSE list, fetched nightly); the sector/size benchmark is market-cap "
                 "weighted over the same names — full mcap, not free-float. "
-                "value = cheapness on P/E, P/B, EV/EBITDA; "
-                "quality = ROE, leverage, net margin (no accruals or margin-stability "
-                "term); momentum = (12M-1M) + 6M price return, needs 1y of history.",
+                "value = EBIT/EV, FCF yield + sustainable growth - 4% (Buffett premium), "
+                "analyst target/price; quality = gross margin, net debt/EBITDA, cash "
+                "conversion, 24-month stress resilience; momentum = 6M return, 6M Sharpe, "
+                "sector momentum; biz momentum = revenue growth YoY, EPS growth YoY. "
+                "Some sub-components (Quality's op-margin sustainability/compounding "
+                "score/receivables trend, Biz Momentum's analyst signal/forward "
+                "visibility/sequential acceleration) need financial-statement history "
+                "not fetched yet and are omitted from the blend until that lands.",
         "errors": errors,
         "signals": signals,
         "bench_sect": share(bench_sect),
@@ -688,15 +878,35 @@ def selftest():
     assert blend({"a": 1.0}, {"a": 2.0}, {"a": None}) == {"a": 1.5}
     assert blend({"a": None}, {"a": None}) == {"a": None}
 
-    assert momentum([1.0] * 250) is None, "short history must not score"
-    flat = [10.0] * 400
-    assert abs(momentum(flat)) < 1e-9, "flat series has no momentum"
-    rising = [float(i) for i in range(1, 401)]
-    assert momentum(rising) > 0, "monotonic rise must be positive momentum"
-    # anchored at -YEAR, not the start: a 5y series must not read as 5y momentum
-    spike = [1.0] * 200 + [float(i) for i in range(1, 301)]
-    assert abs(momentum(spike) - momentum(spike[-400:])) < 1e-9, \
-        "momentum must ignore history older than a year"
+    assert six_month_return([1.0] * 100) is None, "short history must not score"
+    flat400 = [10.0] * 400
+    assert abs(six_month_return(flat400)) < 1e-9, "flat series has no 6M return"
+    rising400 = [float(i) for i in range(1, 401)]
+    assert six_month_return(rising400) > 0, "monotonic rise must be positive"
+
+    assert six_month_sharpe([1.0] * 100) is None, "short history must not score"
+    assert six_month_sharpe(flat400) is None, "zero volatility must not divide by zero"
+    assert six_month_sharpe(rising400) > 0, "steady rise must have positive Sharpe"
+
+    assert stress_resilience_24m([1.0] * 10) is None, "short history must not score"
+    assert stress_resilience_24m([100.0] * 600) == 0.0, "never off its own high = fully resilient"
+    crashed_unrecovered = [100.0] * 300 + [50.0] * 300
+    assert stress_resilience_24m(crashed_unrecovered) == -0.5, \
+        "still 50% below the 24m high = unrecovered"
+    crashed_recovered = [100.0] * 200 + [50.0] * 100 + [100.0] * 200
+    assert abs(stress_resilience_24m(crashed_recovered)) < 1e-9, \
+        "back to the 24m high = fully recovered, same as never having crashed"
+
+    assert percentile_rank({"a": 1, "b": 2, "c": 3, "d": 4}) == \
+        {"a": None, "b": None, "c": None, "d": None}, "below floor=5 must score nobody"
+    five = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+    pr = percentile_rank(five)
+    assert pr["a"] == 0.0 and pr["e"] == 100.0 and pr["c"] == 50.0, pr
+    assert percentile_rank({"a": 1, "b": None, "c": 2, "d": 3, "e": 4, "f": 5})["b"] is None, \
+        "a missing input must stay None, not get ranked"
+
+    assert is_bank({"industry": "Banks - Regional"}) is True
+    assert is_bank({"industry": "IT Services", "sector": "Technology"}) is False
 
     assert risk([1.0] * 10) == {}, "too little history yields no risk stats"
     r = risk([100.0] * 300)
@@ -732,6 +942,41 @@ def selftest():
     assert mcap["RELIANCE.NS"] == 1_800_000, "fresh value must win over cache"
     assert mcap["NEWCO.NS"] == 0, "no cache entry means it stays unresolved, not invented"
     assert backfilled == {"TCS.NS"}, "only the symbol actually filled from cache is reported"
+
+    # Value/Quality sub-component formulas, real-shaped inputs.
+    tcs_like = {"industry": "IT Services", "sector": "Technology",
+                "operatingMargins": 0.24, "totalRevenue": 2.76e12, "enterpriseValue": 8.55e12,
+                "trailingPE": 17.8, "freeCashflow": 3.97e11, "marketCap": 8.87e12,
+                "returnOnEquity": 0.477, "payoutRatio": 0.385, "targetMeanPrice": 2484.67,
+                "grossMargins": 0.404, "totalDebt": 1.13e11, "totalCash": 4.5e11,
+                "ebitda": 7.21e11, "operatingCashflow": 5.23e11}
+    assert ebit_ev(tcs_like) == (0.24 * 2.76e12) / 8.55e12
+    assert ebit_ev({"industry": "Banks - Regional", "trailingPE": 20.0}) == 1 / 20.0, \
+        "a bank must fall back to 1/PE, not a meaningless EV multiple"
+    assert ebit_ev({"industry": "IT Services"}) is None, "missing inputs, no derivation"
+
+    ygt = y_g_t_premium(tcs_like)
+    assert ygt == (3.97e11 / 8.87e12) + (0.477 * (1 - 0.385)) - 0.04
+    assert y_g_t_premium({"freeCashflow": 100.0}) is None, \
+        "a partial sum must not stand in for the whole premium"
+
+    assert tgt_price_ratio(tcs_like, 2400.0) == 2484.67 / 2400.0 - 1
+    assert tgt_price_ratio({}, 2400.0) is None, "no analyst coverage, no ratio"
+
+    assert net_debt_ebitda(tcs_like) == (1.13e11 - 4.5e11) / 7.21e11
+    assert net_debt_ebitda({"industry": "Banks - Regional",
+                             "totalStockholderEquity": 1e11, "totalAssets": 12e11}) == 12.0, \
+        "a bank must fall back to assets/equity, not a meaningless debt ratio"
+
+    assert cash_conversion(tcs_like) == 5.23e11 / 7.21e11
+    assert cash_conversion({"ebitda": 100.0}) is None, "no CFO, no ratio"
+
+    six_m = {"A.NS": 0.10, "B.NS": 0.20, "C.NS": -0.05, "D.NS": 0.15}
+    sectors = {"A.NS": "IT", "B.NS": "IT", "C.NS": "IT", "D.NS": "Energy"}
+    sec_mo = sector_momentum_map(list(six_m), six_m, sectors)
+    assert sec_mo["A.NS"] == sec_mo["B.NS"] == sec_mo["C.NS"] == statistics.median([0.10, 0.20, -0.05]), \
+        "every IT name gets the IT sector's median"
+    assert sec_mo["D.NS"] is None, "Energy has only 1 member, below the 3-name floor"
 
     assert adv([]) is None, "no data must not fake a zero"
     assert adv([100.0] * 5) is None, "below minimum sample must be None"

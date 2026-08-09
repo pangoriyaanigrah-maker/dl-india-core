@@ -459,9 +459,11 @@ SCENARIOS = [
 ]
 
 FACTORS = [
-    ("Value", "val", "P/E, P/B, EV/EBITDA · +ve = cheaper than the universe"),
-    ("Momentum", "momo", "12M−1M plus 6M return · +ve = stronger tape"),
-    ("Quality", "qual", "ROE, leverage, net margin · +ve = higher quality"),
+    ("Value", "val", "EBIT/EV, FCF+growth-4% premium, analyst target/price · +ve = cheaper"),
+    ("Momentum", "momo", "6M return, 6M Sharpe, sector momentum · +ve = stronger tape"),
+    ("Quality", "qual", "Gross margin, net debt/EBITDA, cash conversion, 24M stress "
+     "resilience · +ve = higher quality"),
+    ("Biz Momentum", "bizMomo", "Revenue growth YoY, EPS growth YoY · +ve = accelerating business"),
 ]
 
 
@@ -768,7 +770,8 @@ def build_positions(book, feed):
             "cmp": s.get("cmp") if s else None, "upside": upside(S, h),
             "bucket": bucket_of(S, h["tk"]), "built": built_of(h),
             "status": {"text": text, "class": css, "colour": colour},
-            "signals": {"val": s.get("val"), "momo": s.get("momo"), "qual": s.get("qual")} if s else None,
+            "signals": {"val": s.get("val"), "momo": s.get("momo"), "qual": s.get("qual"),
+                        "bizMomo": s.get("bizMomo")} if s else None,
             "rail": rail(h, s),
         })
     return {"positions": rows, "count": len(rows), "feed": _feed_meta(feed)}

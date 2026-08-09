@@ -815,7 +815,7 @@ function renderPositions(){
         <div class="cell"><div class="lbl">Weight</div>${(h.wt*100).toFixed(1)}%<div class="sub">full ${h.fullWt!=null?fmt.w(h.fullWt):"—"}</div></div>
         <div class="cell ${h.upside!=null&&h.upside>=0?"pos":"neg"}"><div class="lbl">Upside</div>${h.upside!=null?fmt.pct(h.upside):"—"}<div class="sub">${h.cmp?"CMP "+fmt.inr(h.cmp):""}</div></div>
         <div class="cell"><div class="lbl">Signals</div><div class="sigchips">
-          <span>V ${zc(s.val)}</span><span>M ${zc(s.momo)}</span><span>Q ${zc(s.qual)}</span></div></div>
+          <span>V ${zc(s.val)}</span><span>M ${zc(s.momo)}</span><span>Q ${zc(s.qual)}</span><span>B ${zc(s.bizMomo)}</span></div></div>
         <div class="cell"><div class="lbl">Status</div><span class="badge ${h.status.class}">${esc(h.status.text)}</span></div>
       </div>
       <div class="railrow">${railHtml}</div>

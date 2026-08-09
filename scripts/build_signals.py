@@ -721,6 +721,20 @@ def build(previous=None):
     cached = (previous or {}).get("bench_cache") or {}
     bench_cache_backfilled = backfill_mcap(mcap, scored, cached)
 
+    # Best-effort: fetch_fundamentals.py (a separate script/workflow, a
+    # different provider, a different cadence) writes this independently.
+    # Read-only here and never required -- a stock with nothing in it just
+    # scores on whatever Yahoo-sourced sub-components it has, same as any
+    # other partial-data case in this app.
+    import drive
+    try:
+        fundamentals = drive.read_json(drive.FUNDAMENTALS_JSON) or {}
+    except drive.DriveError:
+        fundamentals = {}
+
+    def fund(s, key):
+        return (fundamentals.get(s) or {}).get(key)
+
     # Value/Quality/Momentum sub-components below all follow the same
     # equal-weighted blend() pattern regardless of factor: z-score (or
     # percentile-rank) each sub-component across the cross-section, then
@@ -747,18 +761,17 @@ def build(previous=None):
          for k, v in zscores({s: net_debt_ebitda(info[s]) for s in scored}).items()},
         zscores({s: cash_conversion(info[s]) for s in scored}),
         zscores({s: stress_resilience_24m(px[s]) for s in scored}),
-        # Op margin sustainability, Compounding Score, and Receivables
-        # trend all need multi-year/multi-quarter financial history this
-        # script doesn't fetch yet (blocked on an FMP integration, not
-        # built here) -- blend() already averages only what exists, so
-        # Quality quietly improves in place once those land, no reshape.
+        zscores({s: fund(s, "opMarginSustainability") for s in scored}),
+        zscores({s: fund(s, "compoundingScore") for s in scored}),
+        {k: (-v if v is not None else None)
+         for k, v in zscores({s: fund(s, "receivablesTrend") for s in scored}).items()},
     )
     biz_momo = blend(
         zscores({s: num(info[s], "revenueGrowth") for s in scored}),
         zscores({s: num(info[s], "earningsGrowth") for s in scored}),
-        # Analyst signal, Forward visibility, and Sequential acceleration
-        # are the same story as Quality above -- FMP-blocked, not missing
-        # by oversight.
+        zscores({s: fund(s, "sequentialAcceleration") for s in scored}),
+        zscores({s: fund(s, "forwardVisibility") for s in scored}),
+        percentile_rank({s: fund(s, "analystSignal") for s in scored}),
     )
 
     bench_returns = bench_return_series(close_df, universe, mcap)
@@ -826,12 +839,14 @@ def build(previous=None):
                 "weighted over the same names — full mcap, not free-float. "
                 "value = EBIT/EV, FCF yield + sustainable growth - 4% (Buffett premium), "
                 "analyst target/price; quality = gross margin, net debt/EBITDA, cash "
-                "conversion, 24-month stress resilience; momentum = 6M return, 6M Sharpe, "
-                "sector momentum; biz momentum = revenue growth YoY, EPS growth YoY. "
-                "Some sub-components (Quality's op-margin sustainability/compounding "
-                "score/receivables trend, Biz Momentum's analyst signal/forward "
-                "visibility/sequential acceleration) need financial-statement history "
-                "not fetched yet and are omitted from the blend until that lands.",
+                "conversion, 24-month stress resilience, op-margin sustainability, "
+                "compounding score, receivables trend; momentum = 6M return, 6M Sharpe, "
+                "sector momentum; biz momentum = revenue/EPS growth YoY, sequential "
+                "acceleration, forward visibility, analyst signal. The op-margin/"
+                "compounding/receivables/sequential/visibility/analyst sub-components "
+                "come from fetch_fundamentals.py's own nightly FMP fetch (a separate "
+                "script and file) rather than this run, so a stock scores on whatever "
+                "of those it has as of that fetch's last successful run.",
         "errors": errors,
         "signals": signals,
         "bench_sect": share(bench_sect),

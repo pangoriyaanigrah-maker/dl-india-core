@@ -5,12 +5,13 @@ up separately — Drive already versions files for you.
 
 ```
 Portfolio/
-    holdings.xlsx      the last holdings file you uploaded, untouched
-    trades.xlsx        the last trades file you uploaded, untouched
-    portfolio.json     the book: holdings, trades, cash
-    dashboard.json     every computed screen, in one file
-    signals.json       market data from the evening job
-    metadata.json      what changed and when
+    holdings.xlsx        the last holdings file you uploaded, untouched
+    trades.xlsx          the last trades file you uploaded, untouched
+    portfolio.json       the book: holdings, trades, cash
+    dashboard.json       every computed screen, in one file
+    signals.json         market data from the evening job
+    metadata.json        what changed and when
+    fundamentals.json    FMP-sourced factor sub-components (optional, see below)
 ```
 
 ## Why the files are split this way
@@ -160,6 +161,32 @@ it was — yesterday's data stays live, the error is logged, and the process
 exits non-zero. An empty feed counts as failure, not as "nothing is priced
 today", because writing it would blank every price on the dashboard.
 
+## The fundamentals job (optional)
+
+```bash
+python scripts/fetch_fundamentals.py
+```
+
+Financial-statement-derived factor sub-components (Op margin
+sustainability, Compounding Score, Receivables trend, Sequential
+acceleration, Forward visibility, Analyst signal) from [Financial
+Modeling Prep](https://financialmodelingprep.com/), not Yahoo. Needs
+`FMP_API_KEY` set (locally in `.env`, in CI as a GitHub Actions secret --
+see `.github/workflows/update-fundamentals.yml`). Entirely optional: with
+no key set, or with `fundamentals.json` never created, Value/Quality/
+Momentum/Biz Momentum still work — they just score on whichever
+Yahoo-sourced sub-components they have, same as any other partial-data
+case in this app.
+
+**`fundamentals.json` needs the same one-time manual creation as the
+other files above** — the service account can update an existing Drive
+file but cannot create a new one, and this file didn't exist when your
+Portfolio folder was first set up. Run `python backend/make_starter_files.py`
+again (it now also writes an empty `fundamentals.json` into
+`drive_starter/`) and upload just that one file into your Portfolio
+folder, once. After that, `fetch_fundamentals.py` updates it in place
+like everything else.
+
 ## If Drive goes down
 
 - Reads return **503** with the reason. The dashboard shows its
@@ -179,3 +206,4 @@ today", because writing it would blank every price on the dashboard.
 | Files upload but you cannot find them | No `DRIVE_FOLDER_ID` — they are in the service account's own Drive. Share a folder and set the ID. |
 | `403` from Drive | The folder is not shared with the service account's email, or not as Editor. |
 | CORS errors in the browser | `CORS_ORIGINS` does not include your GitHub Pages URL. |
+| `fetch_fundamentals.py` fails writing `fundamentals.json` | The file was never manually created — see "The fundamentals job" above. |

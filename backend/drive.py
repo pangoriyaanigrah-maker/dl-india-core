@@ -58,6 +58,14 @@ PORTFOLIO_JSON = "portfolio.json"
 DASHBOARD_JSON = "dashboard.json"
 SIGNALS_JSON = "signals.json"
 METADATA_JSON = "metadata.json"
+# Deliberately NOT in JSON_FILES below: connect() auto-creates anything
+# missing from that list and re-raises if creation fails, which would
+# break connect() entirely for every existing install the day this file
+# didn't already exist there (the service account can't create new Drive
+# files, only update ones that exist). fetch_fundamentals.py needs this
+# file created once, manually, the same way the other four originally
+# were -- see make_starter_files.py.
+FUNDAMENTALS_JSON = "fundamentals.json"
 
 JSON_FILES = [PORTFOLIO_JSON, DASHBOARD_JSON, SIGNALS_JSON, METADATA_JSON]
 

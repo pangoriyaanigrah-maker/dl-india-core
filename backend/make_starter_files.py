@@ -34,6 +34,13 @@ def main():
         (OUT / name).write_text(
             json.dumps(drive._empty(name), indent=1, ensure_ascii=False), encoding="utf-8")
 
+    # Not in JSON_FILES (see drive.py's comment on FUNDAMENTALS_JSON), but
+    # needs the exact same one-time manual creation before
+    # fetch_fundamentals.py can ever write to it -- included here so
+    # there's one starter-files step to run, not two.
+    (OUT / drive.FUNDAMENTALS_JSON).write_text(
+        json.dumps({}, indent=1, ensure_ascii=False), encoding="utf-8")
+
     # The uploaded workbooks hit the same wall: the backend REPLACES them on
     # every import, and replacing needs the file to already exist. A real
     # empty workbook, so anything that opens it sees a valid file rather
@@ -46,7 +53,8 @@ def main():
         wb.active["A1"] = "placeholder — replaced on your first import"
         wb.save(OUT / name)
 
-    names = drive.JSON_FILES + [drive.HOLDINGS_XLSX, drive.TRADES_XLSX, drive.CASHFLOWS_XLSX]
+    names = drive.JSON_FILES + [drive.FUNDAMENTALS_JSON,
+                                 drive.HOLDINGS_XLSX, drive.TRADES_XLSX, drive.CASHFLOWS_XLSX]
     print(f"wrote {len(names)} files to {OUT}\n")
     for n in names:
         print(f"  {n}")

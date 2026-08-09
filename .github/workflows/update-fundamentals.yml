@@ -1,0 +1,88 @@
+# .github/workflows/update-fundamentals.yml
+# Financial-statement-derived factor sub-components (Op margin
+# sustainability, Compounding Score, Receivables trend, Sequential
+# acceleration, Forward visibility, Analyst signal) from FMP. Separate
+# from update-signals.yml on purpose: different provider, different
+# quota, and these figures only change when a company reports -- there's
+# no benefit to re-fetching a company's full financial history every
+# night just because its price moved.
+#
+# Scheduled ~30 minutes before update-signals.yml so the same night's
+# signals build picks up fresh fundamentals.json rather than yesterday's;
+# update-signals.yml reads it best-effort either way, so a late or failed
+# run here never blocks that one.
+name: update-fundamentals
+
+permissions:
+  contents: read   # actions/checkout needs this explicitly -- see the
+  # same note in update-signals.yml: once ANY permissions: block is
+  # declared, every unlisted scope drops to none instead of inheriting
+  # the repo default.
+  issues: write     # only the failure-notification step needs this
+
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"    # 17:30 IST daily Mon-Fri, ~30 min before update-signals
+  workflow_dispatch: {}         # manual run button
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r backend/requirements.txt
+
+      # Nothing is committed: Drive is the storage. fundamentals.json
+      # must already exist there (created once, manually -- see
+      # backend/make_starter_files.py) before this can write to it; the
+      # service account can update an existing Drive file but cannot
+      # create a new one.
+      - name: Fetch fundamentals from FMP
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: python scripts/fetch_fundamentals.py
+
+      # Same pattern as update-signals.yml's own failure notification, a
+      # different issue title so the two don't collide or mask each other.
+      - name: Open or update a failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          EXISTING=$(gh issue list --search "Fundamentals refresh is failing in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --title "Fundamentals refresh is failing" \
+              --body "The nightly update-fundamentals job failed. Quality/Biz Momentum factor scores are showing stale FMP-sourced sub-components until this is fixed.
+
+          Run: $RUN_URL
+
+          This issue stays open and gets a comment on each further failure -- it closes itself automatically the next time the job succeeds."
+          fi
+
+  notify-recovered:
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close the failure issue if one is open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          EXISTING=$(gh issue list --search "Fundamentals refresh is failing in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --comment "Fixed -- the job ran clean again."
+          fi

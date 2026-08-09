@@ -462,8 +462,10 @@ FACTORS = [
     ("Value", "val", "EBIT/EV, FCF+growth-4% premium, analyst target/price · +ve = cheaper"),
     ("Momentum", "momo", "6M return, 6M Sharpe, sector momentum · +ve = stronger tape"),
     ("Quality", "qual", "Gross margin, net debt/EBITDA, cash conversion, 24M stress "
-     "resilience · +ve = higher quality"),
-    ("Biz Momentum", "bizMomo", "Revenue growth YoY, EPS growth YoY · +ve = accelerating business"),
+     "resilience, op-margin sustainability, compounding score, receivables trend "
+     "· +ve = higher quality"),
+    ("Biz Momentum", "bizMomo", "Revenue/EPS growth YoY, sequential acceleration, "
+     "forward visibility, analyst signal · +ve = accelerating business"),
 ]
 
 

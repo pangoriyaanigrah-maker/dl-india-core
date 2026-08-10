@@ -119,8 +119,7 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
 .rail .band{position:relative;height:14px}
 .rail .band span{position:absolute;top:0;font-family:'IBM Plex Mono';font-size:10px;
   white-space:nowrap;line-height:14px}
-.rail .rangecap{font-family:'IBM Plex Mono';font-size:10px;color:var(--faint);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:14px}
+.rail .lo,.rail .hi{color:var(--faint)}
 .rail .tg{color:var(--saffron)}
 .rail .addlbl{color:var(--blue)}
 .rail .track{position:relative;height:2px;background:var(--line)}
@@ -781,16 +780,19 @@ function renderPositions(){
       // five prices it's attached to.
       const lab = (pct, cls, text, style) => pct==null ? "" :
         `<span class="${cls}" style="left:${pct}%;transform:translateX(${pct<15?"0":pct>85?"-100%":"-50%"})${style?";"+style:""}">${esc(text)}</span>`;
-      // 52W low/high used to be two separate floating labels -- correct
-      // but two more lines of tiny text on top of TP/CMP/Add pushed the
-      // rail to 5 stacked lines, which read as clutter rather than a
-      // clean rail. They're really one idea (the traded range), so one
-      // static caption says both without competing for rail space with
-      // the three prices that actually move (TP/CMP/Add).
-      const rangeTxt = "52W " + fmt.inr(r.lo) + (r.loEstimated ? " (est.)" : "") +
-        " – " + (r.hiPct!=null ? fmt.inr(r.hi) : "—");
+      // Low/High sit AT their own tick position, same as TP/CMP/Add --
+      // they used to share one static off-track caption because the rail
+      // only had ~199px of shared-column width to work with and two more
+      // positioned labels didn't fit without colliding. Now that the rail
+      // has its own full-width row (~1000px on desktop), that constraint
+      // is gone, so these go back to reading where they actually sit on
+      // the price range, not just as text off to the side.
+      const loTxt = "52W LOW " + fmt.inr(r.lo) + (r.loEstimated ? " (est.)" : "");
       railHtml = `<div class="rail">
-        <div class="rangecap">${esc(rangeTxt)}</div>
+        <div class="band">
+          ${lab(r.loPct, "lo", loTxt)}
+          ${r.hiPct!=null ? lab(r.hiPct, "hi", "52W HIGH " + fmt.inr(r.hi)) : ""}
+        </div>
         <div class="band">${lab(r.tpPct, "tg", "TP " + fmt.inr(h.tp))}</div>
         <div class="track">
           <div class="tick lotick" style="left:${r.loPct}%"></div>

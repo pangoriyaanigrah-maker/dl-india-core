@@ -503,6 +503,21 @@ def is_bank(info_d):
     return "bank" in text
 
 
+def bank_neutral(z, info, negate=False):
+    """Override a z-score dict to 0.0 (neutral) for a bank -- for a
+    sub-component that's structurally N/A for a bank's business model
+    (Receivables trend, Forward visibility), not merely missing data.
+    A bank's factor score must not be silently computed from fewer
+    sub-components than a non-bank's just because 2 of the 18 don't
+    apply to it -- see the "why treat it neutral, not exclude it"
+    discussion this was built from. A NON-bank with a real data gap on
+    the same sub-component still gets excluded (None stays None), same
+    as every other partial-data case in this app -- only is_bank()
+    forces the neutral override; a genuine gap is never faked."""
+    return {k: (0.0 if is_bank(info[k]) else ((-v if v is not None else None) if negate else v))
+            for k, v in z.items()}
+
+
 def ebit_ev(info_d):
     """Operating yield: how much operating profit you get per rupee of
     enterprise value. EBIT itself isn't a field Yahoo serves directly, so
@@ -763,14 +778,13 @@ def build(previous=None):
         zscores({s: stress_resilience_24m(px[s]) for s in scored}),
         zscores({s: fund(s, "opMarginSustainability") for s in scored}),
         zscores({s: fund(s, "compoundingScore") for s in scored}),
-        {k: (-v if v is not None else None)
-         for k, v in zscores({s: fund(s, "receivablesTrend") for s in scored}).items()},
+        bank_neutral(zscores({s: fund(s, "receivablesTrend") for s in scored}), info, negate=True),
     )
     biz_momo = blend(
         zscores({s: num(info[s], "revenueGrowth") for s in scored}),
         zscores({s: num(info[s], "earningsGrowth") for s in scored}),
         zscores({s: fund(s, "sequentialAcceleration") for s in scored}),
-        zscores({s: fund(s, "forwardVisibility") for s in scored}),
+        bank_neutral(zscores({s: fund(s, "forwardVisibility") for s in scored}), info),
         percentile_rank({s: fund(s, "analystSignal") for s in scored}),
     )
 
@@ -922,6 +936,20 @@ def selftest():
 
     assert is_bank({"industry": "Banks - Regional"}) is True
     assert is_bank({"industry": "IT Services", "sector": "Technology"}) is False
+
+    # bank_neutral: a bank's structurally-N/A sub-component scores 0.0
+    # (neutral, unpenalized) regardless of whether z-scoring even had a
+    # value for it; a non-bank with a genuine data gap on the same
+    # sub-component still gets excluded (None), never faked as neutral.
+    bank_info = {"HDFC.NS": {"industry": "Banks - Regional"}, "TCS.NS": {"industry": "IT Services"}}
+    z_with_data = {"HDFC.NS": 1.5, "TCS.NS": 1.5}   # z-scored as if both had a real value
+    assert bank_neutral(z_with_data, bank_info) == {"HDFC.NS": 0.0, "TCS.NS": 1.5}, \
+        "a bank's real value must still be overridden to neutral -- structurally N/A, not merely absent"
+    assert bank_neutral(z_with_data, bank_info, negate=True) == {"HDFC.NS": 0.0, "TCS.NS": -1.5}, \
+        "negate applies to the non-bank's real value, not the bank's forced neutral"
+    z_missing = {"HDFC.NS": None, "TCS.NS": None}   # neither had enough data to z-score
+    assert bank_neutral(z_missing, bank_info) == {"HDFC.NS": 0.0, "TCS.NS": None}, \
+        "the bank is neutral either way; the non-bank's genuine gap must stay excluded, not become neutral too"
 
     assert risk([1.0] * 10) == {}, "too little history yields no risk stats"
     r = risk([100.0] * 300)

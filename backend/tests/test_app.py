@@ -160,9 +160,11 @@ def test_fully_exited_unknown_ticker_gets_no_placeholder(client):
     assert row["sector"] == calculator.EXITED_LABEL
     assert row["bucket"] == calculator.EXITED_LABEL
     port = client.get("/api/portfolio").json()
-    assert any(b["key"] == calculator.EXITED_LABEL and b["pl"] == pytest.approx(5960)
+    # Attribution buckets are gross of costs too (same as the headline
+    # Total P&L) -- 6000, not 6000-40 costs.
+    assert any(b["key"] == calculator.EXITED_LABEL and b["pl"] == pytest.approx(6000)
                for b in port["attribution"]["bySector"])
-    assert any(b["key"] == calculator.EXITED_LABEL and b["pl"] == pytest.approx(5960)
+    assert any(b["key"] == calculator.EXITED_LABEL and b["pl"] == pytest.approx(6000)
                for b in port["attribution"]["bySize"])
 
 
@@ -356,9 +358,12 @@ def test_pl_matches_a_hand_calculation(client):
     assert d["currentValue"] == pytest.approx(value)
     assert d["unrealized"] == pytest.approx(value - invested)
     assert d["realized"] == 0
-    assert d["overallPL"] == pytest.approx(value - invested - costs)
+    assert d["costs"] == pytest.approx(costs)
+    # overallPL is gross of costs -- costs get their own separate card,
+    # not netted into the headline P&L number.
+    assert d["overallPL"] == pytest.approx(value - invested)
     # the identity that must always hold
-    assert d["overallPL"] == pytest.approx(d["unrealized"] + d["realized"] - d["costs"])
+    assert d["overallPL"] == pytest.approx(d["unrealized"] + d["realized"])
 
 
 def test_a_later_buy_never_rewrites_an_earlier_sales_realized_pl(client):
@@ -499,7 +504,7 @@ def test_repeated_holdings_and_trades_imports_stay_consistent(client):
     assert d["unrealized"] == pytest.approx(unreal)
     assert d["realized"] == pytest.approx(realized)
     assert d["costs"] == pytest.approx(costs)
-    assert d["overallPL"] == pytest.approx(d["unrealized"] + d["realized"] - d["costs"])
+    assert d["overallPL"] == pytest.approx(d["unrealized"] + d["realized"])
     assert d["qtyMismatches"] == []
 
     # BETAFIN was dropped from the holdings file two rounds ago: its P&L
@@ -651,14 +656,18 @@ def test_benchmark_xirr_replays_the_same_flows_into_the_index():
 def test_nav_equals_contributed_minus_withdrawn_plus_overall_pl(client):
     """The identity that ties the two independent NAV views together:
     Real NAV (built from actual cash contributed/withdrawn plus actual
-    trade cashflows) must exactly equal contributed - withdrawn +
-    overallPL (built from the weight-based book + FIFO/avg-cost P&L).
-    Two completely different code paths computing the same number is
-    exactly the kind of cross-check that catches a conservation bug in
-    a P&L method -- deliberately uses two lots then a partial sell on
-    ALPHACHEM (so avg-cost's running-average conservation is actually
-    exercised, not just a single-lot pass-through) plus a withdrawal (so
-    both cashflow directions are covered)."""
+    trade cashflows -- costs included, it's real money that really left
+    the account) must exactly equal contributed - withdrawn + overallPL
+    - costs. overallPL itself is deliberately GROSS of costs (costs get
+    their own separate card, not netted into the headline P&L number),
+    so the identity needs that explicit "- costs" term to reconcile with
+    NAV's cash ledger, which was never gross. Two completely different
+    code paths computing the same number is exactly the kind of
+    cross-check that catches a conservation bug in a P&L method --
+    deliberately uses two lots then a partial sell on ALPHACHEM (so
+    avg-cost's running-average conservation is actually exercised, not
+    just a single-lot pass-through) plus a withdrawal (so both cashflow
+    directions are covered)."""
     up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     up(client, "trades", xlsx("Trades", T_HDR, [
         [dt.date(2026, 1, 15), "ALPHACHEM", "Buy", 200, 500.0, 100.0],
@@ -673,7 +682,8 @@ def test_nav_equals_contributed_minus_withdrawn_plus_overall_pl(client):
 
     nav = client.get("/api/nav").json()
     dash = client.get("/api/dashboard").json()
-    assert nav["nav"] == pytest.approx(nav["contributed"] - nav["withdrawn"] + dash["overallPL"])
+    assert nav["nav"] == pytest.approx(
+        nav["contributed"] - nav["withdrawn"] + dash["overallPL"] - dash["costs"])
 
 
 def test_insights_never_mention_stocks_not_in_the_book():

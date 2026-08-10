@@ -480,7 +480,7 @@ function renderOverview(){
 
   el.innerHTML = `
   <div class="stats">
-    ${[["Total P&L",fmt.inr(d.overallPL),"after costs · "+fmt.pct(d.overallReturn)+" on gross",d.overallPL>=0?"pos":"neg"],
+    ${[["Total P&L",fmt.inr(d.overallPL),"before costs · "+fmt.pct(d.overallReturn)+" on gross",d.overallPL>=0?"pos":"neg"],
        ["Realized",fmt.inr(d.realized),"avg-cost basis",d.realized>=0?"pos":"neg"],
        ["Unrealized",fmt.inr(d.unrealized),"marked to feed CMPs",d.unrealized>=0?"pos":"neg"],
        ["Equity",fmt.w(d.equityWeight),"of NAV · "+d.holdingsCount+" names",""],
@@ -528,7 +528,7 @@ function renderOverview(){
     <thead><tr><th>Name</th><th>Action</th><th>Weight path</th><th>Δ</th><th>Trigger</th><th>Dist.</th><th>Strategy</th></tr></thead>
     <tbody>${stagedRows}</tbody>
   </table></div>
-  <div class="sec">P&L attribution <small>total P&L after costs, grouped four ways</small></div>
+  <div class="sec">P&L attribution <small>total P&L before costs, grouped four ways</small></div>
   <div class="attr-grid">
     <div class="panel"><h3>By sector</h3>${barList(pairsOf(p.attribution.bySector))}</div>
     <div class="panel"><h3>By momentum cohort</h3>${barList(pairsOf(p.attribution.byMomentum))}</div>
@@ -706,7 +706,7 @@ function renderPerformance(){
   const maxAbs = Math.max(...p.positions.map(r=>Math.abs(r.total)), 1);
   el.innerHTML = `
   <div class="stats">
-    ${[["Total P&L",fmt.inr(p.totalPL),"after costs · "+fmt.pct(p.returnOnGross)+" on gross",p.totalPL>=0?"pos":"neg"],
+    ${[["Total P&L",fmt.inr(p.totalPL),"before costs · "+fmt.pct(p.returnOnGross)+" on gross",p.totalPL>=0?"pos":"neg"],
        ["Realized",fmt.inr(p.realized),"avg-cost basis",p.realized>=0?"pos":"neg"],
        ["Unrealized",fmt.inr(p.unrealized),"marked to feed prices",p.unrealized>=0?"pos":"neg"],
        ["Costs",fmt.inr(p.costs),"brokerage + charges",""],
@@ -714,7 +714,7 @@ function renderPerformance(){
        ["Hit rate",p.winners+" / "+p.positions.length,"names in profit",""]]
       .map(([k,v,s,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`).join("")}
   </div>
-  <div class="sec">P&L by position <small>after costs</small></div>
+  <div class="sec">P&L by position <small>before costs</small></div>
   <div class="panel" style="margin-bottom:18px">
     ${p.positions.map(r=>{
       const w = Math.abs(r.total)/maxAbs*48, left = r.total<0 ? 50-w : 50;

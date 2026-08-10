@@ -269,8 +269,11 @@ def perf_calc(holdings, trades, signals):
         rows.append({
             "tk": tk, "net": net, "avg": avg, "cmp": c, "marked": marked is not None,
             "unreal": unreal, "realized": realized, "fees": fees,
-            "total": unreal + realized - fees, "invested": buyV,
-            "ret": ((unreal + realized - fees) / buyV) if buyV else 0.0,
+            # Gross of costs, deliberately -- costs get their own card/column
+            # (the "fees" field right above) rather than being netted into
+            # the headline P&L number twice over.
+            "total": unreal + realized, "invested": buyV,
+            "ret": ((unreal + realized) / buyV) if buyV else 0.0,
             "sector": sector_of(h) if h else EXITED_LABEL,
             "analyst": (h.get("analyst") if h else None) or "—",
             "bucket": bucket_of(signals, tk) if h else EXITED_LABEL, "momo": s.get("momo"),

@@ -31,7 +31,18 @@ on:
     - cron: "0 12 * * 1-5"    # 17:30 IST daily Mon-Fri -- starts ~30min before
     # update-signals.yml but runs ~2.5-3hrs, so it's still mid-flight when
     # that job fires; see the note above on why that's fine.
-  workflow_dispatch: {}         # manual run button
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "book (this book's holdings only, a few minutes) or full (the whole ~750-stock universe, ~2.5-3hrs)"
+        type: choice
+        options: [full, book]
+        default: full
+  # The backend dispatches this with scope=book right after an
+  # upload -- same idea as _trigger_signals_refresh(), just scoped down
+  # so a newly-added stock's Quality/Biz Momentum sub-components don't
+  # sit empty until the next full run. A schedule-triggered run has no
+  # `inputs` context at all, hence the `|| 'full'` fallback below.
 
 jobs:
   build:
@@ -56,6 +67,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FMP_SCOPE: ${{ github.event.inputs.scope || 'full' }}
         run: python scripts/fetch_fundamentals.py
 
       # Same pattern as update-signals.yml's own failure notification, a

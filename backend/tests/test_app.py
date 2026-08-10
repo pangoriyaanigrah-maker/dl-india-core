@@ -859,7 +859,10 @@ def test_archival_copy_failure_does_not_mask_a_successful_import(client, monkeyp
 def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch):
     """No GITHUB_TOKEN/GITHUB_REPO set (the default in this test env) ->
     silent no-op, same as the other optional integrations. Set both ->
-    a real dispatch call fires against the GitHub API on import."""
+    a real dispatch call fires against the GitHub API on import -- TWO
+    of them now: update-signals.yml (full, unscoped) and
+    update-fundamentals.yml (scope=book, this book's holdings only, not
+    the full 750-stock universe)."""
     import api
     calls = []
     monkeypatch.setattr(api.urllib.request, "urlopen", lambda req, timeout=10: calls.append(req))
@@ -871,6 +874,8 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     # how stale factor scores went unnoticed on a real deployment.
     assert "not configured" in r.json()["signalRefresh"]
     assert "GITHUB_TOKEN" in r.json()["signalRefresh"]
+    assert "not configured" in r.json()["fundamentalsRefresh"]
+    assert "GITHUB_TOKEN" in r.json()["fundamentalsRefresh"]
 
     # Vercel publishes the repo/branch it deployed, so a token alone is
     # enough -- GITHUB_REPO going unset (while the token was fine) is the
@@ -881,9 +886,18 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     monkeypatch.setenv("VERCEL_GIT_COMMIT_REF", "main")
     r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     assert r.json()["signalRefresh"] == "queued"
-    assert calls[-1].full_url == ("https://api.github.com/repos/jprasham/dl-india-portfolio-dashboard"
-                                   "/actions/workflows/update-signals.yml/dispatches")
-    assert json.loads(calls[-1].data)["ref"] == "main"
+    assert r.json()["fundamentalsRefresh"] == "queued"
+    assert len(calls) == 2
+    signals_call, fund_call = calls[-2], calls[-1]
+    assert signals_call.full_url == ("https://api.github.com/repos/jprasham/dl-india-portfolio-dashboard"
+                                      "/actions/workflows/update-signals.yml/dispatches")
+    assert json.loads(signals_call.data)["ref"] == "main"
+    assert "inputs" not in json.loads(signals_call.data)   # unscoped, always the full universe
+    assert fund_call.full_url == ("https://api.github.com/repos/jprasham/dl-india-portfolio-dashboard"
+                                   "/actions/workflows/update-fundamentals.yml/dispatches")
+    fund_body = json.loads(fund_call.data)
+    assert fund_body["ref"] == "main"
+    assert fund_body["inputs"] == {"scope": "book"}   # never the full universe from an upload
     for v in ("VERCEL_GIT_REPO_OWNER", "VERCEL_GIT_REPO_SLUG", "VERCEL_GIT_COMMIT_REF"):
         monkeypatch.delenv(v)
     calls.clear()
@@ -893,9 +907,11 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     # it used to 404 in a way indistinguishable from a bad token.
     monkeypatch.setenv("GITHUB_TOKEN", "  t\n"), monkeypatch.setenv("GITHUB_REPO", ' "https://github.com/me/repo/" ')
     r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0].full_url == "https://api.github.com/repos/me/repo/actions/workflows/update-signals.yml/dispatches"
+    assert calls[1].full_url == "https://api.github.com/repos/me/repo/actions/workflows/update-fundamentals.yml/dispatches"
     assert r.json()["signalRefresh"] == "queued"
+    assert r.json()["fundamentalsRefresh"] == "queued"
     # urllib defaults a POST body to x-www-form-urlencoded; the GitHub API
     # needs JSON here, and the mismatch was silent.
     assert calls[0].get_header("Content-type") == "application/json"
@@ -903,13 +919,14 @@ def test_signals_refresh_trigger_fires_only_when_configured(client, monkeypatch)
     assert json.loads(calls[0].data)["ref"] == "main"
 
     # a rejected dispatch (bad token, wrong ref, ...) must surface the
-    # reason and the repo/ref it tried, not vanish into a server log
+    # reason and the repo/ref it tried, not vanish into a server log --
+    # for BOTH triggers independently, not just the first one that fires
     def boom(req, timeout=10):
         raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
     monkeypatch.setattr(api.urllib.request, "urlopen", boom)
     r = up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
-    status = r.json()["signalRefresh"]
-    assert status.startswith("failed:") and "404" in status and "me/repo" in status
+    for status in (r.json()["signalRefresh"], r.json()["fundamentalsRefresh"]):
+        assert status.startswith("failed:") and "404" in status and "me/repo" in status
 
 
 def test_quick_price_refresh_patches_cmp_but_preserves_factor_scores(client, monkeypatch):

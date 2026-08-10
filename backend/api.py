@@ -214,24 +214,22 @@ def _run_concurrently(critical=(), best_effort=()):
             f.result()
 
 
-def _trigger_signals_refresh():
-    """Best-effort: ask the existing update-signals GitHub Actions workflow
-    to run now, instead of waiting for its 18:00 IST schedule -- a ticker
-    added by this import has no price/z-score until that job runs. Reuses
-    the workflow's own workflow_dispatch trigger (already there for the
-    manual "Run workflow" button) rather than re-fetching prices inline:
-    that fetch takes ~100s against 750+ symbols, far past what a request
-    handler (and Vercel's function timeout) should ever wait on.
+def _dispatch_workflow(workflow_file, not_configured_suffix, inputs=None):
+    """Best-effort: ask a GitHub Actions workflow to run now via its
+    workflow_dispatch trigger, instead of waiting for its own schedule.
+    Shared by _trigger_signals_refresh() and _trigger_fundamentals_refresh()
+    -- same token/repo/ref resolution and dispatch mechanics either way,
+    only the target workflow file and any extra inputs differ.
 
     Needs GITHUB_TOKEN (repo-scoped, "Actions: write") and GITHUB_REPO
     ("owner/repo") set as env vars.
 
     -> a short status string, surfaced in the import response. This used
     to log-and-swallow, which on a serverless host means the failure is
-    invisible: the workflow silently never fires, signals never refresh,
-    and the dashboard just looks broken with nothing anywhere saying why.
-    Still never raises -- a failed trigger must not fail the import -- but
-    now it says so where someone can actually read it."""
+    invisible: the workflow silently never fires, and the dashboard just
+    looks broken with nothing anywhere saying why. Still never raises --
+    a failed trigger must not fail the import -- but now it says so where
+    someone can actually read it."""
     token = os.environ.get("GITHUB_TOKEN")
     # Vercel already publishes which repo the running deployment was built
     # from, so GITHUB_REPO is only a manual override -- one less variable to
@@ -244,7 +242,7 @@ def _trigger_signals_refresh():
         missing = " and ".join(n for n, v in
                                (("GITHUB_TOKEN", token), ("GITHUB_REPO", repo if "/" in (repo or "") else None))
                                if not v)
-        return f"not configured ({missing} unset) — full signal refresh will wait for the nightly job"
+        return f"not configured ({missing} unset) — {not_configured_suffix}"
     # Pasting into a hosting dashboard's env-var box picks up stray spaces,
     # newlines and quotes far too easily, and "owner/repo" silently becomes
     # a 404 that reads exactly like a permissions problem. Also accept a
@@ -263,11 +261,14 @@ def _trigger_signals_refresh():
                   or os.environ.get("VERCEL_GIT_COMMIT_REF") or "").strip()
     refs = [configured] if configured else ["main", "master"]
 
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/update-signals.yml/dispatches"
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
     last = ""
     for ref in refs:
+        body = {"ref": ref}
+        if inputs:
+            body["inputs"] = inputs
         req = urllib.request.Request(
-            url, data=json.dumps({"ref": ref}).encode(), method="POST",
+            url, data=json.dumps(body).encode(), method="POST",
             # Content-Type matters: urllib defaults a POST body to
             # x-www-form-urlencoded, which is NOT what the GitHub API
             # accepts here -- this was silently mis-set until now.
@@ -280,15 +281,41 @@ def _trigger_signals_refresh():
             return "queued"
         except Exception as e:
             detail = ""
-            body = getattr(e, "read", None)
-            if body:                    # HTTPError carries GitHub's own reason
+            body_reader = getattr(e, "read", None)
+            if body_reader:             # HTTPError carries GitHub's own reason
                 try:
-                    detail = f" — {json.loads(body()).get('message', '')}"
+                    detail = f" — {json.loads(body_reader()).get('message', '')}"
                 except Exception:
                     pass
             last = f"failed: {e}{detail} (repo={repo!r}, ref={ref!r})"
-            log.warning("could not trigger update-signals workflow (import unaffected): %s%s", e, detail)
+            log.warning("could not trigger %s workflow (import unaffected): %s%s", workflow_file, e, detail)
     return last
+
+
+def _trigger_signals_refresh():
+    """Ask update-signals (Yahoo prices + z-scores, ~2-3min) to run now
+    instead of waiting for its 18:00 IST schedule -- a ticker added by
+    this import has no price/z-score until that job runs. Reuses the
+    workflow's own workflow_dispatch trigger (already there for the
+    manual "Run workflow" button) rather than re-fetching prices inline:
+    that fetch takes ~100s against 750+ symbols, far past what a request
+    handler (and Vercel's function timeout) should ever wait on."""
+    return _dispatch_workflow("update-signals.yml", "full signal refresh will wait for the nightly job")
+
+
+def _trigger_fundamentals_refresh():
+    """Ask update-fundamentals (FMP financial-statement sub-components)
+    to run now, scoped to just this book's own holdings (a few minutes)
+    via the scope=book workflow_dispatch input -- not the full ~750-stock
+    universe (~2.5-3hrs), which stays exclusively on its own nightly
+    schedule. Without this, a newly-added stock's Quality/Biz Momentum
+    sub-components sourced from FMP (Op margin sustainability,
+    Compounding Score, Receivables trend, Sequential acceleration,
+    Forward visibility, Analyst signal) would sit at nothing until the
+    next scheduled full run, potentially hours away."""
+    return _dispatch_workflow("update-fundamentals.yml",
+                              "fundamentals sub-components will wait for the nightly job",
+                              inputs={"scope": "book"})
 
 
 def _quick_refresh_prices(book):
@@ -394,9 +421,11 @@ async def import_holdings(file: UploadFile = File(...)):
         raise HTTPException(503, str(e))
 
     refresh = _trigger_signals_refresh()
+    fund_refresh = _trigger_fundamentals_refresh()
     log.info("holdings import %s: %d rows, %d rejected", file.filename, len(holdings), len(errors))
     return {"file": file.filename, "holdings": len(holdings), "trades": len(book["trades"]),
-            "cash": book["cash"], "errors": errors, "signalRefresh": refresh}
+            "cash": book["cash"], "errors": errors, "signalRefresh": refresh,
+            "fundamentalsRefresh": fund_refresh}
 
 
 @router.post("/import/trades", tags=["import"], summary="Upload a trades file")
@@ -453,11 +482,12 @@ async def import_trades(file: UploadFile = File(...)):
         raise HTTPException(503, str(e))
 
     refresh = _trigger_signals_refresh()
+    fund_refresh = _trigger_fundamentals_refresh()
     log.info("trades import %s: %d added, %d duplicates, %d placeholders, %d rejected",
              file.filename, added, dupes, len(placeholders), len(errors))
     return {"file": file.filename, "added": added, "duplicates": dupes,
             "total": len(merged), "placeholderHoldings": placeholders, "errors": errors,
-            "signalRefresh": refresh}
+            "signalRefresh": refresh, "fundamentalsRefresh": fund_refresh}
 
 
 @router.post("/import/cashflows", tags=["import"], summary="Upload a capital contributions/withdrawals file")

@@ -236,18 +236,30 @@ def fetch_one(symbol):
     }
 
 
-def run(symbols):
+def run(symbols, merge_into_existing=False):
     """Fetch every symbol, carrying forward the previous run's value for
     anything that comes back empty this time -- same philosophy as
     build_signals.py's bench_cache: these figures barely move between
     nightly runs, so a transient FMP miss shouldn't blank a score that
-    was working yesterday."""
+    was working yesterday.
+
+    merge_into_existing=True is for a partial (book-only) run: `out`
+    starts as a COPY of everything already on Drive, so the ~740
+    universe symbols not in this run's `symbols` list survive untouched
+    -- without this, a book-only run of ~10-15 holdings would overwrite
+    fundamentals.json with just those 10-15 entries and silently wipe
+    out hours of full-universe data. The nightly full run leaves this
+    False (default): `symbols` already covers the whole current
+    universe + holdings, so starting from {} is correct there and also
+    naturally drops anything no longer in the universe (a delisted
+    constituent, say)."""
     import drive
 
     drive.connect()
     previous = drive.read_json(drive.FUNDAMENTALS_JSON) or {}
+    out = dict(previous) if merge_into_existing else {}
 
-    out, failures = {}, 0
+    failures = 0
     for i, sym in enumerate(symbols, 1):
         try:
             fresh = fetch_one(sym)
@@ -266,8 +278,9 @@ def run(symbols):
             log.info("  %d/%d symbols fetched (%d with no data at all so far)", i, len(symbols), failures)
 
     drive.write_json(drive.FUNDAMENTALS_JSON, out)
-    log.info("done: %d/%d symbols have at least one fundamentals sub-component (%d total misses)",
-              len(out), len(symbols), failures)
+    log.info("done: %d/%d symbols processed this run got at least one sub-component "
+              "(%d total misses this run; %d symbols total now on file)",
+              len(symbols) - failures, len(symbols), failures, len(out))
     return out
 
 
@@ -336,8 +349,22 @@ if __name__ == "__main__":
     if not os.environ.get("FMP_API_KEY"):
         sys.exit("FMP_API_KEY not set")
     holdings = load_book()
-    universe = constituents()
-    wanted_symbols = sorted({(h.get("yfSymbol") or f'{h["tk"]}.NS') for h in holdings}
-                            | {f"{t}.NS" for t in universe})
-    log.info("fetching fundamentals for %d symbols...", len(wanted_symbols))
-    run(wanted_symbols)
+    book_symbols = {(h.get("yfSymbol") or f'{h["tk"]}.NS') for h in holdings}
+
+    # "book" scope: just this book's own ~10-20 holdings, a few minutes --
+    # what an upload triggers so a newly-added stock's Quality/Biz Momentum
+    # sub-components don't sit at nothing until the next full run. "full"
+    # (default, what the nightly schedule always uses): the whole ~750
+    # constituent universe too, several hours. See run()'s docstring for
+    # why book scope must MERGE into the existing file rather than replace
+    # it -- a partial run must never wipe out the other ~740 entries.
+    scope = (os.environ.get("FMP_SCOPE") or "full").strip().lower()
+    if scope == "book":
+        wanted_symbols = sorted(book_symbols)
+        log.info("book scope: fetching fundamentals for %d holdings...", len(wanted_symbols))
+        run(wanted_symbols, merge_into_existing=True)
+    else:
+        universe = constituents()
+        wanted_symbols = sorted(book_symbols | {f"{t}.NS" for t in universe})
+        log.info("full scope: fetching fundamentals for %d symbols...", len(wanted_symbols))
+        run(wanted_symbols, merge_into_existing=False)

@@ -957,10 +957,22 @@ function reportHTML(kind, r){
       ? `<br><span style="color:var(--dim)">Full market refresh queued in the background — factor scores, beta and
          benchmark update in ~2 min. Prices above are already live.</span>`
       : `<br><span style="color:var(--amber)">Full market refresh not started: ${esc(rf)}</span>`;
+  // Same idea as the signal refresh above, but for the FMP-sourced
+  // sub-components (Op margin sustainability, Compounding Score,
+  // Receivables trend, Sequential acceleration, Forward visibility,
+  // Analyst signal) -- scoped to just this book's holdings (a few
+  // minutes), not the full ~750-stock universe (hours, nightly only).
+  const fr = r.fundamentalsRefresh;
+  const fundRefreshNote = !fr ? ""
+    : fr === "queued"
+      ? `<br><span style="color:var(--dim)">Fundamentals refresh queued for your holdings — Quality/Biz Momentum's
+         FMP-sourced figures update in a few minutes.</span>`
+      : `<br><span style="color:var(--amber)">Fundamentals refresh not started: ${esc(fr)}</span>`;
   return `<div class="sec" style="margin-top:22px">${kind} <small>${esc(r.file)}</small></div>
     <div class="panel">${bits.filter(Boolean).join(" · ") || "nothing to change"}
       ${errors.length ? `<br><b style="color:var(--down)">${errors.length} row(s) rejected:</b>` : ""}
       ${refreshNote}
+      ${fundRefreshNote}
     </div>${errs}`;
 }
 async function savePermanently(){

@@ -7,10 +7,16 @@
 # no benefit to re-fetching a company's full financial history every
 # night just because its price moved.
 #
-# Scheduled ~30 minutes before update-signals.yml so the same night's
-# signals build picks up fresh fundamentals.json rather than yesterday's;
-# update-signals.yml reads it best-effort either way, so a late or failed
-# run here never blocks that one.
+# Runs long -- a real 750-stock pass is ~2.5-3 hours (6 FMP calls per
+# stock), nothing like update-signals.yml's ~2-3 minutes. Scheduled to
+# START ~30 minutes before update-signals.yml, but it will still be
+# running when that job fires and reads fundamentals.json; that's fine
+# by design, not a bug. fetch_fundamentals.py's run() writes the file
+# ONCE at the very end, after the whole loop -- so update-signals.yml
+# always reads either last night's complete data or an older complete
+# run, never a partial/mid-write one. Fundamentals lag signals by up to
+# a day when both run the same evening; since these figures only change
+# on a quarterly report, that lag is immaterial.
 name: update-fundamentals
 
 permissions:
@@ -22,7 +28,9 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"    # 17:30 IST daily Mon-Fri, ~30 min before update-signals
+    - cron: "0 12 * * 1-5"    # 17:30 IST daily Mon-Fri -- starts ~30min before
+    # update-signals.yml but runs ~2.5-3hrs, so it's still mid-flight when
+    # that job fires; see the note above on why that's fine.
   workflow_dispatch: {}         # manual run button
 
 jobs:

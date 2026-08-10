@@ -648,6 +648,34 @@ def test_benchmark_xirr_replays_the_same_flows_into_the_index():
     assert calculator.benchmark_xirr([(dt.date(2020, 1, 1), -1000.0)], levels) is None
 
 
+def test_nav_equals_contributed_minus_withdrawn_plus_overall_pl(client):
+    """The identity that ties the two independent NAV views together:
+    Real NAV (built from actual cash contributed/withdrawn plus actual
+    trade cashflows) must exactly equal contributed - withdrawn +
+    overallPL (built from the weight-based book + FIFO/avg-cost P&L).
+    Two completely different code paths computing the same number is
+    exactly the kind of cross-check that catches a conservation bug in
+    a P&L method -- deliberately uses two lots then a partial sell on
+    ALPHACHEM (so avg-cost's running-average conservation is actually
+    exercised, not just a single-lot pass-through) plus a withdrawal (so
+    both cashflow directions are covered)."""
+    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    up(client, "trades", xlsx("Trades", T_HDR, [
+        [dt.date(2026, 1, 15), "ALPHACHEM", "Buy", 200, 500.0, 100.0],
+        [dt.date(2026, 1, 20), "ALPHACHEM", "Buy", 200, 510.0, 100.0],
+        [dt.date(2026, 1, 25), "ALPHACHEM", "Sell", 150, 550.0, 75.0],
+        [dt.date(2026, 2, 3), "BETAFIN", "Buy", 900, 298.0, 268.2],
+    ]))
+    up(client, "cashflows", xlsx("Cashflows", CF_HDR, [
+        [dt.date(2026, 1, 1), "Contribution", 500000, "Seed capital"],
+        [dt.date(2026, 2, 10), "Withdrawal", 20000, "Partial withdrawal"],
+    ]))
+
+    nav = client.get("/api/nav").json()
+    dash = client.get("/api/dashboard").json()
+    assert nav["nav"] == pytest.approx(nav["contributed"] - nav["withdrawn"] + dash["overallPL"])
+
+
 def test_insights_never_mention_stocks_not_in_the_book():
     """The exact bug the CIO review caught: 'BEL + Kaynes' and 'Sun,
     Titan' used to be hardcoded into the Crowding and Posture insight

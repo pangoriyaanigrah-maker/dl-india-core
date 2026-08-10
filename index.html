@@ -481,7 +481,7 @@ function renderOverview(){
   el.innerHTML = `
   <div class="stats">
     ${[["Total P&L",fmt.inr(d.overallPL),"after costs · "+fmt.pct(d.overallReturn)+" on gross",d.overallPL>=0?"pos":"neg"],
-       ["Realized",fmt.inr(d.realized),"FIFO basis",d.realized>=0?"pos":"neg"],
+       ["Realized",fmt.inr(d.realized),"avg-cost basis",d.realized>=0?"pos":"neg"],
        ["Unrealized",fmt.inr(d.unrealized),"marked to feed CMPs",d.unrealized>=0?"pos":"neg"],
        ["Equity",fmt.w(d.equityWeight),"of NAV · "+d.holdingsCount+" names",""],
        ["Cash",fmt.w(d.cashWeight),"vs "+fmt.w(C.pendingAdds)+" staged adds",""],
@@ -537,8 +537,8 @@ function renderOverview(){
   </div>
   <div class="sec">Insights <small>rule-based reads for the IC — judgement stays human</small></div>
   ${insightHTML(p.insights)}
-  <div class="foot">Realized P&L is FIFO — each sell books profit against its specific oldest lots, so a
-  later buy never rewrites an earlier sale. "+X% on gross" above is cumulative P&L on capital
+  <div class="foot">Realized P&L is average-cost — each sell books profit against the position's running
+  average cost at that moment, which a later buy never revisits or rewrites. "+X% on gross" above is cumulative P&L on capital
   deployed, not a return — it has no time dimension and gets distorted by trading activity. XIRR
   in the Real NAV panel (money-weighted, from your actual dated contributions) is the number that
   answers "what did I actually earn." Prices and z-scores come from build_signals.py
@@ -760,8 +760,8 @@ function renderPerformance(){
     })()}
   </details>
   <div class="foot">* ticker not in the price feed — marked at its last trade price.
-  Realized P&L is FIFO — each sell is costed against its own oldest lots, so a later buy never
-  rewrites an earlier sale's booked profit. Avg cost is the cost basis of the lots you still hold.
+  Realized P&L is average-cost — each sell is costed against the position's running average at
+  that moment, so a later buy never rewrites an earlier sale's booked profit. Avg cost updates on every buy and resets on a full exit.
   Return is money-weighted on gross invested — TWR/XIRR would come from the dated cash flows above.</div>`;
 }
 

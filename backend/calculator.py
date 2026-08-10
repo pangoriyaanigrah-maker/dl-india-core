@@ -194,55 +194,57 @@ def wavg(holdings, f):
 
 
 # ---------------------------------------------------------------- P&L
-def _fifo(trades_for_tk):
-    """Chronological FIFO lot accounting for one ticker -- also what
-    Indian capital-gains law actually requires (per-lot, oldest first).
+def _avg_cost(trades_for_tk):
+    """Chronological weighted-average-cost accounting for one ticker.
 
-    A sell realizes P&L against the cost of the SPECIFIC oldest lots it
-    consumes, not a lifetime average -- a later buy can never rewrite an
-    earlier sale's booked profit. This replaces a real bug: the previous
-    lifetime-average approach let a re-entry after a full exit silently
-    zero out (or distort) the P&L already realized on that exit.
+    A single running (qty, avg_cost) for the whole position, not
+    per-lot: a Buy blends the new shares into the existing average; a
+    Sell realizes P&L against whatever that average is AT THAT MOMENT
+    and does not itself change the average. Each sale's P&L is booked
+    once, incrementally, at the time it happens -- a later buy can never
+    reach back and rewrite an earlier sale's already-booked profit,
+    because that sale never gets recomputed once trades have moved past
+    it. avg_cost resets to 0 on a full exit (qty hits 0) rather than
+    carrying forward, so a later re-entry starts a fresh average instead
+    of blending with a position that's already fully closed out -- this
+    is the exact bug a naive lifetime-average implementation has: without
+    the reset, a re-entry's buy price would blend into a "lifetime"
+    average that includes shares already sold, silently distorting P&L
+    already realized on the earlier exit.
 
-    -> (lots remaining [[qty, cost], ...], realized total, fees total,
-        gross buy value, last trade price seen)
+    -> (qty remaining, avg cost of qty remaining, realized total, fees
+        total, gross buy value, last trade price seen)
     """
     ordered = sorted(trades_for_tk, key=lambda t: (t["date"], 0 if t["side"] == "Buy" else 1))
-    lots = []
-    realized = fees = buyV = 0.0
+    qty = avg_cost = realized = fees = buyV = 0.0
     last = None
     for t in ordered:
         q, p = t["qty"], t["price"]
         fees += t.get("costs") or 0
         last = p
         if t["side"] == "Buy":
-            lots.append([q, p])
+            avg_cost = (qty * avg_cost + q * p) / (qty + q) if (qty + q) > 1e-9 else p
+            qty += q
             buyV += q * p
         else:
-            remaining = q
-            cost_of_sold = 0.0
-            while remaining > 1e-9 and lots:
-                lot_qty, lot_cost = lots[0]
-                take = min(lot_qty, remaining)
-                cost_of_sold += take * lot_cost
-                lots[0][0] -= take
-                remaining -= take
-                if lots[0][0] <= 1e-9:
-                    lots.pop(0)
-            # ponytail: a sell exceeding recorded buys (bad data, not a
-            # real scenario the app should ever produce) prices the excess
-            # at zero cost rather than raising -- a wrong number here is
-            # recoverable, a crash on import is not.
-            realized += q * p - cost_of_sold
-    return lots, realized, fees, buyV, last
+            # ponytail: a sell exceeding the qty actually held (bad data,
+            # not a real scenario the app should ever produce) prices the
+            # excess at zero cost rather than going negative or raising --
+            # a wrong number here is recoverable, a crash on import is not.
+            take = min(q, qty)
+            realized += q * p - take * avg_cost
+            qty -= take
+            if qty <= 1e-9:
+                qty, avg_cost = 0.0, 0.0
+    return qty, avg_cost, realized, fees, buyV, last
 
 
 def perf_calc(holdings, trades, signals):
-    """FIFO P&L. Avg cost and realized P&L are always trades-derived --
-    the trade ledger is the only record of what was actually paid.
-    Unrealized P&L uses the holdings file's stated quantity when it has
-    one (the current, authoritative share count); trades-derived net
-    quantity (FIFO lots remaining) is only a fallback for a placeholder
+    """Average-cost P&L. Avg cost and realized P&L are always
+    trades-derived -- the trade ledger is the only record of what was
+    actually paid. Unrealized P&L uses the holdings file's stated
+    quantity when it has one (the current, authoritative share count);
+    trades-derived net quantity is only a fallback for a placeholder
     holding that has no holdings row yet. When both exist and disagree,
     it's reported in qtyMismatches rather than silently trusted -- a
     missed trade row or an unlogged bonus/split should surface, not skew
@@ -254,9 +256,7 @@ def perf_calc(holdings, trades, signals):
     by_tk = {h["tk"]: h for h in holdings}
     rows, mismatches = [], []
     for tk, tks_trades in by_tk_trades.items():
-        lots, realized, fees, buyV, last = _fifo(tks_trades)
-        tradesQty = sum(l[0] for l in lots)
-        avg = (sum(l[0] * l[1] for l in lots) / tradesQty) if tradesQty else 0.0
+        tradesQty, avg, realized, fees, buyV, last = _avg_cost(tks_trades)
         h = by_tk.get(tk)
         statedQty = h.get("qty") if h else None
         net = statedQty if statedQty is not None else tradesQty

@@ -363,12 +363,17 @@ def test_pl_matches_a_hand_calculation(client):
 
 def test_a_later_buy_never_rewrites_an_earlier_sales_realized_pl(client):
     """The exact bug the CIO review caught: buy 100 @ 10, sell 50 @ 15
-    (books Rs 250), then buy 100 more @ 20. Under a lifetime-average-cost
-    scheme the later buy drags the average up and silently zeroes out the
-    profit already booked on the sale. FIFO must not let that happen --
-    the Rs 250 stays Rs 250 regardless of what's bought afterward. The
-    remaining position's avg cost should reflect only the lots still
-    held (50 @ 10 + 100 @ 20), not a lifetime blend."""
+    (books Rs 250 against the only average that exists at that moment,
+    10), then buy 100 more @ 20. A naive LIFETIME-average scheme (recomputed
+    from all trades ever, including ones after the sale) would drag the
+    average up and silently zero out the profit already booked on the
+    sale. Booking incrementally at the moment of each sale must not let
+    that happen -- the Rs 250 stays Rs 250 regardless of what's bought
+    afterward. The remaining position's avg cost blends everything still
+    held (50 @ 10 + 100 @ 20 -> 150 @ 16.67), which is correct for avg-cost
+    -- unlike FIFO, a later buy DOES belong in the running average of what's
+    still held, it just must never reach back and change an already-booked
+    sale."""
     up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
     up(client, "trades", xlsx("Trades", T_HDR, [
         [dt.date(2026, 1, 1), "ALPHACHEM", "Buy",  100, 10.0, 0.0],
@@ -379,6 +384,44 @@ def test_a_later_buy_never_rewrites_an_earlier_sales_realized_pl(client):
     assert row["realized"] == pytest.approx(250)
     assert row["net"] == pytest.approx(150)
     assert row["avg"] == pytest.approx((50 * 10 + 100 * 20) / 150)
+
+
+def test_avg_cost_genuinely_differs_from_fifo_when_two_lots_precede_a_sell(client):
+    """The case where the two methods actually disagree, proving this is
+    real average-cost and not FIFO wearing a new docstring: buy 100 @ 10,
+    buy 100 @ 20 (both lots held BEFORE any sale -> running avg = 15),
+    then sell 100 @ 25. FIFO would cost the sale against the first lot
+    (10) for realized=1500, remaining avg=20. Average-cost costs it
+    against the blended average (15) instead: realized=1000, and the
+    average is UNCHANGED by the sale (100 left @ 15, not recomputed)."""
+    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    up(client, "trades", xlsx("Trades", T_HDR, [
+        [dt.date(2026, 1, 1), "ALPHACHEM", "Buy",  100, 10.0, 0.0],
+        [dt.date(2026, 1, 2), "ALPHACHEM", "Buy",  100, 20.0, 0.0],
+        [dt.date(2026, 1, 10), "ALPHACHEM", "Sell", 100, 25.0, 0.0],
+    ]))
+    row = next(r for r in client.get("/api/performance").json()["positions"] if r["tk"] == "ALPHACHEM")
+    assert row["realized"] == pytest.approx(1000), "must be avg-cost's 1000, not FIFO's 1500"
+    assert row["net"] == pytest.approx(100)
+    assert row["avg"] == pytest.approx(15), "the sale must not have moved the average"
+
+
+def test_avg_cost_resets_on_a_full_exit_not_a_lifetime_blend(client):
+    """Buy 100 @ 10, sell all 100 @ 20 (full exit, books Rs 1000, avg
+    resets to 0), then buy 50 @ 30. The new position's average must be a
+    fresh 30, not blended with the fully-exited 10 -- that blending is
+    exactly the historical bug (a re-entry after a full exit distorting
+    P&L via a lifetime average)."""
+    up(client, "holdings", xlsx("Portfolio", H_HDR, HOLDINGS))
+    up(client, "trades", xlsx("Trades", T_HDR, [
+        [dt.date(2026, 1, 1), "ALPHACHEM", "Buy",  100, 10.0, 0.0],
+        [dt.date(2026, 1, 5), "ALPHACHEM", "Sell", 100, 20.0, 0.0],
+        [dt.date(2026, 1, 10), "ALPHACHEM", "Buy", 50,  30.0, 0.0],
+    ]))
+    row = next(r for r in client.get("/api/performance").json()["positions"] if r["tk"] == "ALPHACHEM")
+    assert row["realized"] == pytest.approx(1000)
+    assert row["net"] == pytest.approx(50)
+    assert row["avg"] == pytest.approx(30), "a fresh average after a full exit, not a lifetime blend with 10"
 
 
 def test_holdings_qty_drives_unrealized_pl_and_flags_mismatch(client):

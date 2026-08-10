@@ -573,7 +573,12 @@ def net_debt_ebitda(info_d):
     assets/equity (inverted so lower is still better), Yahoo's closest
     analogue to a bank capital-adequacy ratio."""
     if is_bank(info_d):
-        equity = num(info_d, "totalStockholderEquity") or num(info_d, "bookValue")
+        # bookValue in Yahoo's .info is PER-SHARE, not total -- a real bug
+        # caught on review: totalAssets (a total rupee figure) divided by
+        # a per-share bookValue isn't a leverage ratio at all, it's a
+        # number roughly on the order of shares outstanding. No safe
+        # fallback exists here; totalStockholderEquity or nothing.
+        equity = num(info_d, "totalStockholderEquity")
         assets = num(info_d, "totalAssets")
         if not equity or not assets:
             return None
@@ -1010,6 +1015,13 @@ def selftest():
     assert net_debt_ebitda({"industry": "Banks - Regional",
                              "totalStockholderEquity": 1e11, "totalAssets": 12e11}) == 12.0, \
         "a bank must fall back to assets/equity, not a meaningless debt ratio"
+    # Real bug caught on review: bookValue is PER-SHARE (Yahoo confirmed
+    # ~394 for HDFCBANK, not a total-equity-sized number), so a bank with
+    # totalAssets but no totalStockholderEquity must return None, never
+    # silently divide a total by a per-share figure.
+    assert net_debt_ebitda({"industry": "Banks - Regional",
+                             "bookValue": 394.0, "totalAssets": 12e11}) is None, \
+        "bookValue is per-share -- must never stand in for total equity"
 
     assert cash_conversion(tcs_like) == 5.23e11 / 7.21e11
     assert cash_conversion({"ebitda": 100.0}) is None, "no CFO, no ratio"

@@ -15,7 +15,7 @@ permissions:
 
 on:
   schedule:
-    - cron: "30 12 * * 1-5"   # 18:00 IST daily Mon-Fri (buffer after close)
+    - cron: "30 15 * * 1-5"   # 21:00 IST daily Mon-Fri
   workflow_dispatch: {}        # manual run button
 
 jobs:

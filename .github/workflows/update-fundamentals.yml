@@ -8,15 +8,17 @@
 # night just because its price moved.
 #
 # Runs long -- a real 750-stock pass is ~2.5-3 hours (6 FMP calls per
-# stock), nothing like update-signals.yml's ~2-3 minutes. Scheduled to
-# START ~30 minutes before update-signals.yml, but it will still be
-# running when that job fires and reads fundamentals.json; that's fine
-# by design, not a bug. fetch_fundamentals.py's run() writes the file
-# ONCE at the very end, after the whole loop -- so update-signals.yml
-# always reads either last night's complete data or an older complete
-# run, never a partial/mid-write one. Fundamentals lag signals by up to
-# a day when both run the same evening; since these figures only change
-# on a quarterly report, that lag is immaterial.
+# stock), nothing like update-signals.yml's ~2-3 minutes. Starts at
+# 17:30 IST, update-signals.yml at 21:00 IST -- a 3.5hr gap, normally
+# enough for this to finish first, but NOT relied on: even if it's
+# still running when update-signals.yml fires and reads
+# fundamentals.json, that's fine by design, not a bug.
+# fetch_fundamentals.py's run() writes the file ONCE at the very end,
+# after the whole loop -- so update-signals.yml always reads either an
+# already-complete run or an older complete one, never a partial/
+# mid-write file. Fundamentals lag signals by up to a day in the worst
+# case; since these figures only change on a quarterly report, that
+# lag is immaterial.
 name: update-fundamentals
 
 permissions:
@@ -28,9 +30,9 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"    # 17:30 IST daily Mon-Fri -- starts ~30min before
-    # update-signals.yml but runs ~2.5-3hrs, so it's still mid-flight when
-    # that job fires; see the note above on why that's fine.
+    - cron: "0 12 * * 1-5"    # 17:30 IST daily Mon-Fri -- 3.5hrs before
+    # update-signals.yml's 21:00 IST; see the note above on why the exact
+    # gap doesn't actually matter for correctness.
   workflow_dispatch:
     inputs:
       scope:

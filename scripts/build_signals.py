@@ -99,6 +99,30 @@ def zscores(raw, floor=5, clip=True):
     return out
 
 
+def pct_to_z(pct_map):
+    """{key: percentile 0-100|None} -> {key: z-equivalent|None}, same +/-3
+    clamp convention zscores() uses. blend() just averages whatever
+    sub-components it's handed, on the assumption they're all z-scores
+    already -- percentile_rank()'s own docstring flags that a 0-100 number
+    isn't on that footing, but nothing ever actually converted it before
+    blending. A raw 0-100 value averaged straight into a +/-3 z-score is a
+    genuine units mismatch: a top-percentile analyst signal (about 100)
+    alongside two near-zero z-scores blended to a nonsensical ~33-sigma
+    Biz Momentum reading -- no real quantity is 33 standard deviations out.
+    Uses the inverse-normal CDF (the standard percentile<->z conversion);
+    clamped away from the exact 0/100 boundary first since inv_cdf is
+    undefined there."""
+    nd = statistics.NormalDist()
+    out = {}
+    for k, p in pct_map.items():
+        if p is None:
+            out[k] = None
+            continue
+        u = min(max(p / 100, 0.001), 0.999)
+        out[k] = round(max(-3.0, min(3.0, nd.inv_cdf(u))), 2)
+    return out
+
+
 def blend(*maps):
     """Average the z-maps that have a value for a key; None if none do."""
     keys = set().union(*(m.keys() for m in maps))
@@ -789,7 +813,7 @@ def build(previous=None):
         zscores({s: num(info[s], "earningsGrowth") for s in scored}),
         zscores({s: fund(s, "sequentialAcceleration") for s in scored}),
         bank_neutral(zscores({s: fund(s, "forwardVisibility") for s in scored}), info),
-        percentile_rank({s: fund(s, "analystSignal") for s in scored}),
+        pct_to_z(percentile_rank({s: fund(s, "analystSignal") for s in scored})),
     )
 
     bench_returns = bench_return_series(close_df, universe, mcap)
@@ -938,6 +962,13 @@ def selftest():
     assert pr["a"] == 0.0 and pr["e"] == 100.0 and pr["c"] == 50.0, pr
     assert percentile_rank({"a": 1, "b": None, "c": 2, "d": 3, "e": 4, "f": 5})["b"] is None, \
         "a missing input must stay None, not get ranked"
+
+    pz = pct_to_z(pr)
+    assert pz["c"] == 0.0, "the 50th percentile is z 0, same center as a real z-score"
+    assert pz["a"] == -3.0 and pz["e"] == 3.0, \
+        "the extreme percentiles clamp to +/-3, same bound zscores() uses -- never a raw 0/100"
+    assert -3.0 < pz["b"] < 0.0 < pz["d"] < 3.0, "everything between stays strictly ordered and in range"
+    assert pct_to_z({"a": None}) == {"a": None}
 
     assert is_bank({"industry": "Banks - Regional"}) is True
     assert is_bank({"industry": "IT Services", "sector": "Technology"}) is False

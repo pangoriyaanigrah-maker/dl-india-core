@@ -22,12 +22,10 @@ import datetime as dt
 import math
 from decimal import ROUND_HALF_UP, Decimal
 
-# Size cuts in Rs crore. MUST match CUTS in scripts/build_signals.py.
-# These are AMFI's official semi-annual large/mid/small cap classification
-# cutoffs (SEBI-mandated, published each Jan/Jul) -- not derived from our
-# own benchmark or holdings data. Update both copies when AMFI republishes.
-# AMFI has no "Micro" tier; only three buckets exist here on purpose.
-CUTS = {"large": 106300, "mid": 33500}
+# Size cuts in Rs crore. MUST match CUTS in scripts/build_signals.py. Not
+# AMFI's official large/mid/small cutoffs -- this book uses its own, wider
+# 4-tier scheme instead (AMFI has no Micro tier at all).
+CUTS = {"large": 15000, "mid": 8000, "small": 3000}
 
 # A trade-ledger ticker with no current holdings row is, by construction,
 # one you no longer track as an open position (see the trades-import
@@ -44,7 +42,7 @@ BENCH_SECT_FALLBACK = {
     "Energy": 0.09, "Consumer Defensive": 0.07, "Basic Materials": 0.07, "Healthcare": 0.06,
     "Communication Services": 0.03, "Utilities": 0.02,
 }
-BENCH_SIZE_FALLBACK = {"Large": 0.72, "Mid": 0.18, "Small": 0.10}
+BENCH_SIZE_FALLBACK = {"Large": 0.60, "Mid": 0.15, "Small": 0.15, "Micro": 0.10}
 
 # Yahoo (and the Screener.in fallback build_signals.py uses for names Yahoo
 # has no sector for) report sectors in their own taxonomy -- "Basic
@@ -127,7 +125,8 @@ def bucket_of(signals, tk):
     m = s.get("mcap") if s else None
     if m is None:
         return "Unclassified"
-    return "Large" if m >= CUTS["large"] else "Mid" if m >= CUTS["mid"] else "Small"
+    return ("Large" if m >= CUTS["large"] else "Mid" if m >= CUTS["mid"]
+            else "Small" if m >= CUTS["small"] else "Micro")
 
 
 SECTOR_UNSET_LABEL = "Sector not set"
@@ -738,7 +737,7 @@ def build_exposure(book, feed):
     held_canon = {canon_sector(s) for s in w_sec}
     not_held = [(s, wt) for s, wt in sect.items() if s not in held_canon]
 
-    size_w = {"Large": 0.0, "Mid": 0.0, "Small": 0.0}
+    size_w = {"Large": 0.0, "Mid": 0.0, "Small": 0.0, "Micro": 0.0}
     unpriced = 0.0
     for h in H:
         b = bucket_of(S, h["tk"])

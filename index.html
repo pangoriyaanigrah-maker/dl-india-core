@@ -562,7 +562,7 @@ function renderExposures(){
       <td>${cell(f.highest)}</td>
       <td>${cell(f.lowest)}</td></tr>`;
   }).join("");
-  const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D", Unclassified:"var(--faint)"};
+  const sc = {Large:"#4E7BC4", Mid:"#F2A93B", Small:"#43C08D", Micro:"#C4574E", Unclassified:"var(--faint)"};
   // Reconciled so the displayed column actually sums to 100.0% rather than
   // drifting a tenth of a point off from rounding each row independently.
   const secPortfolioPct = reconcilePercents(e.sectors.map(s=>s.portfolio));

@@ -41,9 +41,8 @@ OUT = "signals.json"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # Size cuts in Rs crore. MUST match CUTS in backend/calculator.py, or the
-# dashboard's own size buckets and this benchmark disagree. AMFI's official
-# semi-annual large/mid/small classification cutoffs -- see calculator.py.
-CUTS = {"large": 106300, "mid": 33500}
+# dashboard's own size buckets and this benchmark disagree -- see calculator.py.
+CUTS = {"large": 15000, "mid": 8000, "small": 3000}
 
 # Cross-sectional universe: every NSE-listed name from Nifty 100 down through
 # Microcap 250, unioned -- the book can hold large, mid, small or micro-cap
@@ -843,7 +842,8 @@ def build(previous=None):
     for s, (m, sector) in bench_cache.items():
         bench_sect[sector or "Unclassified"] += m
         bench_size["Large" if m >= CUTS["large"] else
-                   "Mid" if m >= CUTS["mid"] else "Small"] += m
+                   "Mid" if m >= CUTS["mid"] else
+                   "Small" if m >= CUTS["small"] else "Micro"] += m
     print(f"  benchmark coverage: {len(bench_cache)}/{len(universe)} constituents"
           + (f" ({from_cache} carried over from the previous run)" if from_cache else ""))
     tot = sum(bench_sect.values())

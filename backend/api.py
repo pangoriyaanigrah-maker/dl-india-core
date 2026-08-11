@@ -388,10 +388,16 @@ async def validate_import(kind: str, file: UploadFile = File(...)):
         raise HTTPException(404, f"Unknown import kind {kind!r}.")
     data = await _read(file)
     try:
-        _, errors = _PARSERS[kind](data, file.filename)
+        rows, errors = _PARSERS[kind](data, file.filename)
     except parser.ImportError_ as e:
         raise HTTPException(422, str(e))
-    return {"file": file.filename, "errors": errors}
+    resp = {"file": file.filename, "errors": errors}
+    if kind == "holdings":
+        # A zero-weight book has no live position anywhere in it -- there's
+        # nothing for a trade ledger to establish cost basis for, so the
+        # frontend can skip requiring one for this upload.
+        resp["allZeroWeight"] = not any(h["wt"] for h in rows)
+    return resp
 
 
 @router.post("/import/holdings", tags=["import"], summary="Upload a holdings file")

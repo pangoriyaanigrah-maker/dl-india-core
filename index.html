@@ -976,15 +976,33 @@ function reportHTML(kind, r){
     </div>${errs}`;
 }
 async function savePermanently(){
-  // Holdings now carries the share quantity that unrealized P&L is based
-  // on; trades carries realized P&L and cost basis. Importing one without
-  // the other lets them drift out of sync, so both are required together,
-  // always -- no partial upload.
-  if (!picked.h || !picked.t){
-    alert("Pick both a holdings file and a trades file — they're imported together.");
+  // Holdings carries the share quantity that unrealized P&L is based on;
+  // trades carries realized P&L and cost basis. Importing one without the
+  // other lets them drift out of sync -- but only for a stock that actually
+  // has a live position. A 0-weight holding has no position for a trade
+  // ledger to establish cost basis for, so a holdings file that's entirely
+  // 0-weight (all-cash / watchlist book) doesn't need a trades file at all.
+  if (!picked.h){
+    alert("Pick a holdings file to upload.");
     return;
   }
-  const jobs = [["holdings", picked.h, "Holdings import"], ["trades", picked.t, "Trades import"]];
+  if (!picked.t){
+    const fd = new FormData();
+    fd.append("file", picked.h, picked.h.name);
+    let v;
+    try{ v = await API.post("/api/validate/holdings", fd); }
+    catch(e){
+      const msg = document.getElementById("msg");
+      msg.className = "msg err"; msg.textContent = "Nothing saved — " + e.message;
+      return;
+    }
+    if (!v.allZeroWeight){
+      alert("This holdings file has non-zero-weight positions — pick a trades file too.");
+      return;
+    }
+  }
+  const jobs = [["holdings", picked.h, "Holdings import"]];
+  if (picked.t) jobs.push(["trades", picked.t, "Trades import"]);
   if (picked.cf) jobs.push(["cashflows", picked.cf, "Cashflows import"]);
   if (!confirm(`Upload ${jobs.map(j=>j[0]).join(", ")} to the backend and save permanently?\n\n` +
                `Trades and cashflows are appended (duplicates ignored); holdings update metadata without ` +

@@ -771,6 +771,20 @@ def test_validate_endpoint_matches_import_errors_but_writes_nothing(client):
     assert client.get("/api/dashboard").json()["holdingsCount"] == 0   # still nothing written -- validate only
 
 
+def test_validate_holdings_flags_an_all_zero_weight_book(client):
+    """A holdings file where every row is 0 weight has no live position for
+    a trade ledger to establish cost basis for -- the frontend uses this
+    flag to skip requiring a trades file alongside it."""
+    r = client.post("/api/validate/holdings",
+                     files={"file": ("f.xlsx", xlsx("Portfolio", H_HDR, HOLDINGS), "application/octet-stream")})
+    assert r.json()["allZeroWeight"] is False    # HOLDINGS has nonzero weights
+
+    zero = [[row[0], row[1], row[2], row[3], row[4], 0.0, 0.0, *row[7:]] for row in HOLDINGS]
+    r2 = client.post("/api/validate/holdings",
+                      files={"file": ("f.xlsx", xlsx("Portfolio", H_HDR, zero), "application/octet-stream")})
+    assert r2.status_code == 200 and r2.json()["allZeroWeight"] is True
+
+
 def test_missing_required_column_gives_a_useful_422(client):
     r = up(client, "trades", xlsx("Trades", ["Date", "Ticker", "Side"], [[None, "A", "Buy"]]))
     assert r.status_code == 422 and "Ticker, Side, Qty and Price" in r.json()["detail"]

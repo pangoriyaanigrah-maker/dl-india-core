@@ -706,11 +706,30 @@ def build_performance(book, feed):
     }
 
 
+def live_wt(h):
+    """The weight a holding actually carries for sector/size composition --
+    the live Weight when there's a real position, falling back to
+    FullWeight for a staged position nothing has been bought into yet
+    (Weight 0, FullWeight > 0) so the book's planned market-cap/sector mix
+    is visible before the first trade lands, not just after. An exiting
+    position (Weight > 0, FullWeight 0) still uses its real Weight -- it's
+    still actually held, so its real exposure must stay visible, not zero
+    out early just because the target is to wind it down. A holding with
+    neither (both 0, or never built and never planned) stays 0, same as a
+    fully-built book always behaved."""
+    return h["wt"] if h["wt"] else (h.get("fullWt") or 0.0)
+
+
 def build_exposure(book, feed):
     H, S = book["holdings"], feed.get("signals") or {}
     P = perf_calc(H, book["trades"], S)
     sect, size_bench, live = _bench(feed)
-    W = total_weight(H)
+    # Sector/size composition uses live_wt(), not raw wt -- see its
+    # docstring. NOT total_weight(H): a fully-built book has wt == live_wt
+    # everywhere so this is identical then, but an all-staged book (every
+    # wt 0) must not fall back to total_weight's "or 1.0" placeholder,
+    # which would divide real FullWeight numerators by a meaningless 1.0.
+    W = sum(live_wt(h) for h in H) or 1.0
 
     factors = []
     for name, key, note in FACTORS:
@@ -729,7 +748,7 @@ def build_exposure(book, feed):
 
     w_sec = {}
     for h in H:
-        w_sec[sector_of(h)] = w_sec.get(sector_of(h), 0.0) + h["wt"]
+        w_sec[sector_of(h)] = w_sec.get(sector_of(h), 0.0) + live_wt(h)
     pl_sec = {b["key"]: b["pl"] for b in group_pl(P["rows"], lambda r: r["sector"])}
     sectors = [{"sector": s, "portfolio": w_sec[s] / W, "benchmark": sect.get(canon_sector(s), 0.0),
                 "active": w_sec[s] / W - sect.get(canon_sector(s), 0.0), "pl": pl_sec.get(s, 0.0)}
@@ -742,9 +761,9 @@ def build_exposure(book, feed):
     for h in H:
         b = bucket_of(S, h["tk"])
         if b in size_w:
-            size_w[b] += h["wt"]
+            size_w[b] += live_wt(h)
         else:
-            unpriced += h["wt"]
+            unpriced += live_wt(h)
     return {
         "factors": factors, "sectors": sectors,
         "notHeld": {"count": len(not_held), "benchmarkWeight": sum(w for _, w in not_held)},

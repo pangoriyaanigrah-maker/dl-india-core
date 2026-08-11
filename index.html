@@ -249,9 +249,9 @@ h1{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(34px,6vw,52px)
   <div id="preview"></div>
   <div class="sec" style="margin-top:26px">Save permanently <small>nothing is written until you click this</small></div>
   <div class="panel" style="margin-bottom:18px">
-    Picking a file does not upload it. Choose both the holdings file and the trades file (cashflows is
-    optional, only when capital actually moved), then click below: the backend validates, imports and
-    reports exactly what changed.
+    Picking a file does not upload it. Choose the holdings file — trades (only when you have executions
+    to record) and cashflows (only when capital actually moved) are both optional and can be uploaded on
+    their own later — then click below: the backend validates, imports and reports exactly what changed.
     <div class="btnrow"><button class="act" onclick="savePermanently()">Save Permanently</button>
       <button class="act ghost" onclick="resetImport()">Clear</button></div>
   </div>
@@ -982,30 +982,18 @@ function reportHTML(kind, r){
     </div>${errs}`;
 }
 async function savePermanently(){
-  // Holdings carries the share quantity that unrealized P&L is based on;
-  // trades carries realized P&L and cost basis. Importing one without the
-  // other lets them drift out of sync -- but only for a stock that actually
-  // has a live position. A 0-weight holding has no position for a trade
-  // ledger to establish cost basis for, so a holdings file that's entirely
-  // 0-weight (all-cash / watchlist book) doesn't need a trades file at all.
+  // Holdings and trades are independent ledgers, not a matched pair: weight,
+  // market cap, sector, size bucket -- everything Exposures/Overview/Risk
+  // show -- comes entirely from the holdings file plus the live market-data
+  // feed. Trades only feed cost basis and realized P&L (Positions/
+  // Performance), and are appended, never replaced, so there's no "current"
+  // trades file a holdings upload could be paired against. A ticker with
+  // weight but no trades on record simply has no P&L row yet, same as a
+  // trades-only placeholder ticker has no metadata yet -- both are normal,
+  // recoverable partial states, not a reason to block the save.
   if (!picked.h){
     alert("Pick a holdings file to upload.");
     return;
-  }
-  if (!picked.t){
-    const fd = new FormData();
-    fd.append("file", picked.h, picked.h.name);
-    let v;
-    try{ v = await API.post("/api/validate/holdings", fd); }
-    catch(e){
-      const msg = document.getElementById("msg");
-      msg.className = "msg err"; msg.textContent = "Nothing saved — " + e.message;
-      return;
-    }
-    if (!v.allZeroWeight){
-      alert("This holdings file has non-zero-weight positions — pick a trades file too.");
-      return;
-    }
   }
   const jobs = [["holdings", picked.h, "Holdings import"]];
   if (picked.t) jobs.push(["trades", picked.t, "Trades import"]);

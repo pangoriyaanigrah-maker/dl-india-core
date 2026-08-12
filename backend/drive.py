@@ -251,35 +251,49 @@ class DriveStore:
     def write_bytes(self, name, data, mime="application/octet-stream"):
         from googleapiclient.http import MediaIoBaseUpload
 
-        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
         fid = self._file_id(name)
-        try:
-            if fid:
-                # update() replaces content in place: the old version
-                # stays readable until the new one lands, so a failed
-                # upload leaves the previous file intact, not truncated.
-                self.svc.files().update(fileId=fid, media_body=media).execute()
-            else:
-                created = self.svc.files().create(
-                    body={"name": name, "parents": [self.folder_id]},
-                    media_body=media, fields="id", supportsAllDrives=True,
-                ).execute()
-                with self._ids_lock:
-                    self._ids[name] = created["id"]
-        except Exception as e:
-            # The one failure worth naming precisely. A service account has
-            # no storage of its own, so it can modify a file you own but
-            # cannot create one. Shared drives are the documented fix and
-            # they need Google Workspace; on personal Gmail the answer is
-            # to create the files yourself, once.
-            if "storageQuotaExceeded" in str(e) or "do not have storage quota" in str(e):
-                raise DriveError(
-                    f"cannot create {name}: a Google service account has no storage quota of its "
-                    f"own, so it can only update files that already exist. Run "
-                    f"`python backend/make_starter_files.py` and upload the results to your "
-                    f"Portfolio folder once — after that everything works normally."
-                )
-            raise DriveError(f"could not write {name} to Drive ({e})")
+        last_err = None
+        # 3 tries: a flaky connection mid-upload (observed: ssl.SSLEOFError,
+        # after a real ~28-minute, 750-symbol fundamentals fetch had already
+        # succeeded) used to discard the entire run over one dropped
+        # connection on the final save. A fresh MediaIoBaseUpload each
+        # attempt -- resumable=False reads its BytesIO once, so retrying
+        # with an already-consumed stream would silently upload nothing.
+        for attempt in range(3):
+            media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
+            try:
+                if fid:
+                    # update() replaces content in place: the old version
+                    # stays readable until the new one lands, so a failed
+                    # upload leaves the previous file intact, not truncated.
+                    self.svc.files().update(fileId=fid, media_body=media).execute()
+                else:
+                    created = self.svc.files().create(
+                        body={"name": name, "parents": [self.folder_id]},
+                        media_body=media, fields="id", supportsAllDrives=True,
+                    ).execute()
+                    with self._ids_lock:
+                        self._ids[name] = created["id"]
+                return
+            except Exception as e:
+                # The one failure worth naming precisely, and never worth
+                # retrying: a service account has no storage of its own, so
+                # it can modify a file you own but cannot create one. Shared
+                # drives are the documented fix and they need Google
+                # Workspace; on personal Gmail the answer is to create the
+                # files yourself, once.
+                if "storageQuotaExceeded" in str(e) or "do not have storage quota" in str(e):
+                    raise DriveError(
+                        f"cannot create {name}: a Google service account has no storage quota of its "
+                        f"own, so it can only update files that already exist. Run "
+                        f"`python backend/make_starter_files.py` and upload the results to your "
+                        f"Portfolio folder once — after that everything works normally."
+                    )
+                last_err = e
+                if attempt < 2:
+                    log.warning("write %s to Drive failed (attempt %d/3), retrying: %s", name, attempt + 1, e)
+                    time.sleep(2 ** attempt)   # 1s, then 2s
+        raise DriveError(f"could not write {name} to Drive after 3 attempts ({last_err})")
 
     def write_json(self, name, obj):
         self.write_bytes(name, json.dumps(obj, indent=1, ensure_ascii=False).encode("utf-8"),

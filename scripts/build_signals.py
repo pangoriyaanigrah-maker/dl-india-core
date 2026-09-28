@@ -887,7 +887,7 @@ def build(previous=None):
                 "sector momentum; biz momentum = revenue/EPS growth YoY, sequential "
                 "acceleration, forward visibility, analyst signal. The op-margin/"
                 "compounding/receivables/sequential/visibility/analyst sub-components "
-                "come from fetch_fundamentals.py's own nightly FMP fetch (a separate "
+                "come from fetch_fundamentals.py's own weekly FMP fetch (a separate "
                 "script and file) rather than this run, so a stock scores on whatever "
                 "of those it has as of that fetch's last successful run.",
         "errors": errors,

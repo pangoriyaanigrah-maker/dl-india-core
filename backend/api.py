@@ -307,14 +307,14 @@ def _trigger_fundamentals_refresh():
     """Ask update-fundamentals (FMP financial-statement sub-components)
     to run now, scoped to just this book's own holdings (a few minutes)
     via the scope=book workflow_dispatch input -- not the full ~750-stock
-    universe (~2.5-3hrs), which stays exclusively on its own nightly
-    schedule. Without this, a newly-added stock's Quality/Biz Momentum
-    sub-components sourced from FMP (Op margin sustainability,
+    universe (~30-45min in practice), which stays exclusively on its own
+    weekly (Monday) schedule. Without this, a newly-added stock's Quality/
+    Biz Momentum sub-components sourced from FMP (Op margin sustainability,
     Compounding Score, Receivables trend, Sequential acceleration,
     Forward visibility, Analyst signal) would sit at nothing until the
-    next scheduled full run, potentially hours away."""
+    next scheduled full run, potentially days away."""
     return _dispatch_workflow("update-fundamentals.yml",
-                              "fundamentals sub-components will wait for the nightly job",
+                              "fundamentals sub-components will wait for the weekly job",
                               inputs={"scope": "book"})
 
 

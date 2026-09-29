@@ -5,23 +5,24 @@
 # from update-signals.yml on purpose: different provider, different
 # quota, and these figures only change when a company reports -- there's
 # no benefit to re-fetching a company's full financial history every
-# night just because its price moved. Weekly (Monday), not nightly, for
+# night just because its price moved. Weekly (Sunday), not nightly, for
 # the same reason -- a quarterly-reported figure is still exactly as
 # fresh a week later.
 #
 # Runs long -- a real 750-stock pass has measured ~30-45 minutes in
 # practice, nothing like update-signals.yml's ~2-3 minutes (this
 # comment's own 2.5-3hr worst case is the conservative estimate the job
-# was originally sized for). Starts at 17:30 IST Monday, update-signals.yml
-# at 21:00 IST every weekday -- a 3.5hr gap that Monday, normally enough
-# for this to finish first, but NOT relied on: even if it's still running
-# when update-signals.yml fires and reads fundamentals.json, that's fine
-# by design, not a bug. fetch_fundamentals.py's run() writes the file
-# ONCE at the very end, after the whole loop -- so update-signals.yml
-# always reads either an already-complete run or an older complete one,
-# never a partial/mid-write file. Fundamentals can lag signals by up to
-# a week in the worst case; since these figures only change on a
-# quarterly report, that lag is immaterial.
+# was originally sized for). Starts Sunday morning, 08:00 IST -- no
+# markets open and no update-signals.yml run that day to race against,
+# so it always has the whole day free rather than a tight same-day gap.
+# By the time Monday's 21:00 IST update-signals.yml run reads
+# fundamentals.json, Sunday's fetch is long since finished; even if it
+# weren't, that's fine by design, not a bug -- fetch_fundamentals.py's
+# run() writes the file ONCE at the very end, after the whole loop, so
+# update-signals.yml always reads either an already-complete run or an
+# older complete one, never a partial/mid-write file. Fundamentals can
+# lag signals by up to a week in the worst case; since these figures
+# only change on a quarterly report, that lag is immaterial.
 name: update-fundamentals
 
 permissions:
@@ -33,9 +34,9 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 12 * * 1"      # 17:30 IST Monday only -- 3.5hrs before that
-    # day's update-signals.yml run at 21:00 IST; see the note above on why
-    # the exact gap doesn't actually matter for correctness.
+    - cron: "30 2 * * 0"      # 08:00 IST Sunday -- see the note above on
+    # why Sunday, and on why the gap to Monday's update-signals.yml run
+    # doesn't actually matter for correctness.
   workflow_dispatch:
     inputs:
       scope:

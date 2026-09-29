@@ -308,7 +308,7 @@ def _trigger_fundamentals_refresh():
     to run now, scoped to just this book's own holdings (a few minutes)
     via the scope=book workflow_dispatch input -- not the full ~750-stock
     universe (~30-45min in practice), which stays exclusively on its own
-    weekly (Monday) schedule. Without this, a newly-added stock's Quality/
+    weekly (Sunday) schedule. Without this, a newly-added stock's Quality/
     Biz Momentum sub-components sourced from FMP (Op margin sustainability,
     Compounding Score, Receivables trend, Sequential acceleration,
     Forward visibility, Analyst signal) would sit at nothing until the
